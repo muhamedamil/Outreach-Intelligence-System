@@ -8,12 +8,9 @@ from app.agents.researcher.parser import safe_parse_json
 
 from app.services.scraper.service import scrape_multiple
 from app.services.llm.client import llm_generate
-
-from app.models.business import BusinessProfile, Source
-
+from app.models.business import SizeSignals, DigitalPresence, ToolsDetected
 
 # SOURCE RELIABILITY
-
 def get_source_reliability(url: str) -> float:
     if "linkedin.com" in url:
         return 0.6
@@ -21,16 +18,6 @@ def get_source_reliability(url: str) -> float:
         return 0.7
     return 0.9  # assume official / high-trust
 
-# Filtering the URLs
-def filter_urls(urls: List[str]) -> List[str]:
-    cleaned = []
-    for url in urls:
-        if not url.startswith("http"):
-            continue
-        if any(ext in url for ext in [".pdf", ".jpg", ".png"]):
-            continue
-        cleaned.append(url)
-    return cleaned
 
 
 # CONTEXT BUILDER
@@ -100,7 +87,7 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
     # SEARCH
     urls = await search_duckduckgo(query)
 
-    urls = filter_urls(list(dict.fromkeys(urls)))
+    urls = list(dict.fromkeys(urls))
 
     if not urls:
         return BusinessProfile(
@@ -111,8 +98,9 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
         )
 
     # SCRAPE (LIMITED + ASYNC)
+    scraped = await scrape_multiple(urls)
 
-    scraped = await scrape_multiple(urls[:5])
+    scraped = sorted(scraped, key=lambda x: len(x["content"]), reverse=True)
 
     if not scraped:
         return BusinessProfile(
@@ -172,23 +160,28 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
     # FINAL OBJECT
     # -------------------------
     return BusinessProfile(
-        company_name=company,
-        location=location,
-        industry=normalized.get("industry"),
-        description=normalized.get("description"),
-        size_signals={
-            "employee_estimate": normalized.get("employee_estimate"),
-            "branches": normalized.get("branches")
-        },
-        digital_presence={
-            "website": normalized.get("website"),
-            "social_links": normalized.get("social_links", [])
-        },
-        tools_detected={
-            "booking_system": normalized.get("booking_system"),
-            "crm": normalized.get("crm"),
-            "communication": normalized.get("communication")
-        },
-        sources=sources,
-        confidence_score=confidence
+    company_name=company,
+    location=location,
+
+    industry=normalized.get("industry"),
+    description=normalized.get("description"),
+
+    size_signals=SizeSignals(
+        employee_estimate=normalized.get("employee_estimate"),
+        branches=normalized.get("branches")
+    ),
+
+    digital_presence=DigitalPresence(
+        website=normalized.get("website"),
+        social_links=normalized.get("social_links", [])
+    ),
+
+    tools_detected=ToolsDetected(
+        booking_system=normalized.get("booking_system"),
+        crm=normalized.get("crm"),
+        communication=normalized.get("communication")
+    ),
+
+    sources=sources,
+    confidence_score=confidence
     )
