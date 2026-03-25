@@ -2,6 +2,9 @@
 
 import httpx
 import asyncio
+from app.config.settings import settings
+
+timeout = settings.SCRAPER_TIMEOUT
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -21,7 +24,7 @@ class HTTPClient:
             cls._client = httpx.AsyncClient(
                 headers=HEADERS,
                 follow_redirects=True,
-                timeout=10
+                timeout= timeout
             )
         return cls._client
 

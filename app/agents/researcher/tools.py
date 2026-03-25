@@ -3,6 +3,12 @@
 import httpx
 from bs4 import BeautifulSoup
 from typing import List
+from app.config.settings import settings
+
+from app.config.settings import settings
+
+
+timeout = settings.SCRAPER_TIMEOUT
 
 
 HEADERS = {
@@ -18,7 +24,7 @@ async def search_duckduckgo(query: str, max_results: int = 5) -> List[str]:
             response = await client.post(
                 SEARCH_URL,
                 data={"q": query},
-                timeout=10
+                timeout=timeout
             )
         except Exception:
             return []

@@ -26,4 +26,4 @@ def extract_text(html: str) -> str:
     if len(cleaned) < 200:
         return ""
 
-    return cleaned[:5000]
+    return cleaned[:10000]
