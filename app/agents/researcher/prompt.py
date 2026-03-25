@@ -1,5 +1,6 @@
 # app/agents/researcher/prompt.py
 
+
 def build_prompt(context: str, company: str, location: str) -> str:
     return f"""
 You are a business intelligence extraction system.
@@ -17,7 +18,6 @@ Return STRICT JSON with keys:
 - description
 - employee_estimate
 - branches
-- digital_presence
 - website
 - social_links (list)
 - booking_system
