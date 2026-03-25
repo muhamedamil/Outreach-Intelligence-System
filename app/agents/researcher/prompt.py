@@ -17,6 +17,7 @@ Return STRICT JSON with keys:
 - description
 - employee_estimate
 - branches
+- digital_presence
 - website
 - social_links (list)
 - booking_system
