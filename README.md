@@ -1,8 +1,8 @@
 # 🌌Outreach Intelligence System
 
-**The 0.01% Standard Multi-Agent Lead Research & Outreach Pipeline.**
+**The Standard Multi-Agent Lead Research & Outreach Pipeline.**
 
-Antigravity is a high-performance, resilient AI pipeline designed to transform raw lead lists into deeply researched business intelligence and hyper-personalized outreach campaigns. It bypasses traditional scraping barriers using advanced AI synthesis and multi-agent coordination.
+OIS is a high-performance, resilient AI pipeline designed to transform raw lead lists into deeply researched business intelligence and hyper-personalized outreach campaigns. It bypasses traditional scraping barriers using advanced AI synthesis and multi-agent coordination.
 
 ---
 
