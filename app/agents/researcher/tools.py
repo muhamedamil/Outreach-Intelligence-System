@@ -50,7 +50,23 @@ async def search_tavily(
         return results
         
     except Exception as e:
-        logger.error(f"Tavily search error: {str(e)}")
+        logger.error(f"Tavily search error ({search_depth}): {str(e)}")
+        
+        # Fallback to basic if advanced failed (common for 432/subscription errors)
+        if search_depth == "advanced":
+            logger.info("Retrying with basic search depth...")
+            try:
+                response = tavily.search(
+                    query=query, 
+                    search_depth="basic", 
+                    max_results=max_results,
+                    include_raw_content=include_raw,
+                    include_answer=include_answer
+                )
+                return response.get("results", [])
+            except Exception as basic_e:
+                logger.error(f"Tavily basic search also failed: {str(basic_e)}")
+        
         return []
 
 # Deprecated: keeping for reference during migration if needed
