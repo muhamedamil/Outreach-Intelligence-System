@@ -90,7 +90,3 @@ Visit `http://127.0.0.1:8000` to access the dashboard.
 
 ---
 
-## 🤝 Contribution
-"0.01% Engineering" means code that is readable, resilient, and ready for production. Pull requests are welcome for any architectural improvements.
-
-**Built with ❤️ for the future of AI Outreach.**
