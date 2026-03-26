@@ -22,8 +22,8 @@ def extract_text(html: str) -> str:
     # Normalize whitespace
     cleaned = " ".join(text.split())
 
-    # Content quality check
-    if len(cleaned) < 200:
+    # Content quality check (Lowered for search result compatibility)
+    if len(cleaned) < 100:
         return ""
 
     return cleaned[:10000]

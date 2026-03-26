@@ -7,6 +7,7 @@ from app.agents.researcher.prompt import build_prompt
 from app.agents.researcher.parser import safe_parse_json
 
 from app.services.scraper.service import scrape_multiple
+from app.agents.contact_finder.sources import build_directory_urls
 from app.services.llm.client import llm_generate
 from app.models.business import SizeSignals, DigitalPresence, ToolsDetected, BusinessProfile, Source
 import logging
@@ -120,8 +121,14 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
     logger.info(f"Searching Tavily for: '{query}'")
     search_results = await search_tavily(query, include_raw=False)
     
-    # Extract URLs for manual scraping fallback
+    # Extract URLs
     urls = [r["url"] for r in search_results]
+    
+    # FALLBACK to manual search if Tavily failed
+    if not urls:
+        logger.warning("Tavily search yielded no URLs. Falling back to directory search...")
+        urls = build_directory_urls(company, location)
+    
     urls = list(dict.fromkeys(urls))
     logger.info(f"Unique URLs found: {len(urls)} -> {urls}")
 

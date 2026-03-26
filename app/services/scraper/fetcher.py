@@ -68,6 +68,8 @@ async def fetch_html(
             if attempt == retries:
                 return ""
 
-            await asyncio.sleep(backoff_factor ** attempt)
+            # Add jitter to backoff
+            sleep_time = (backoff_factor ** attempt) + random.uniform(0.1, 0.5)
+            await asyncio.sleep(sleep_time)
 
     return ""

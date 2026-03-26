@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize Tavily Client
 try:
-    tavily = TavilyClient(api_key=settings.TAVILY_API_KEY)
+    api_key = settings.TAVILY_API_KEY.strip() if settings.TAVILY_API_KEY else None
+    tavily = TavilyClient(api_key=api_key)
 except Exception as e:
     logger.error(f"Failed to initialize Tavily client: {e}")
     tavily = None
