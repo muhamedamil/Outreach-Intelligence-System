@@ -21,9 +21,28 @@ REQUIRED_COLUMNS = ["company_name", "location"]
 
 
 def validate_columns(df: pd.DataFrame):
+    # Normalize column names: lowercase, replace spaces with underscores
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Map missing columns based on the provided sample format
+    if "company_name" not in df.columns and "location" not in df.columns:
+        unnamed = [c for c in df.columns if "unnamed:" in str(c)]
+        if len(unnamed) >= 4:
+            # Shifted format: Col 0 is empty, Col 1 is Index, Col 2 is Location, Col 3 is Company Name
+            df.rename(columns={
+                df.columns[2]: "location",
+                df.columns[3]: "company_name"
+            }, inplace=True)
+        elif len(unnamed) >= 3:
+            # Normal no-header format: Col 0 is Index, Col 1 is Location, Col 2 is Company Name
+            df.rename(columns={
+                df.columns[1]: "location",
+                df.columns[2]: "company_name"
+            }, inplace=True)
+
     missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+        raise ValueError(f"Missing required columns: {missing}. Expected 'company_name' and 'location', or an un-headed format with Location in column 2 and Company Name in column 3.")
 
 
 # -------------------------
@@ -92,7 +111,16 @@ async def process_excel(file_path: str) -> List[Dict]:
     # Load file
     df = pd.read_excel(file_path)
 
+    # Clean up fully empty rows (trailing rows in Excel)
+    df.dropna(how="all", inplace=True)
+
     validate_columns(df)
+
+    # Drop rows that don't even have a company_name
+    df.dropna(subset=["company_name"], inplace=True)
+
+    # Fill remaining NaNs with empty strings to prevent json/pydantic issues
+    df = df.astype(object).fillna("")
 
     records = df.to_dict(orient="records")
 
