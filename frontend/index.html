@@ -2,21 +2,89 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>AI Outreach System</title>
-    <link rel="stylesheet" href="styles.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outreach Intelligence | Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">▲</div>
+                <span>Outreach Intelligence System</span>
+            </div>
+            <nav class="nav">
+                <a href="#" class="nav-item active">Dashboard</a>
+                <a href="#" class="nav-item">Campaigns</a>
+                <a href="#" class="nav-item">Settings</a>
+            </nav>
+            <div class="upload-section">
+                <h3>Process Lead List</h3>
+                <p>Upload .xlsx or .xls file</p>
+                <label class="file-label">
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+                    <span>Choose File</span>
+                </label>
+                <button id="uploadBtn" onclick="uploadFile()">Run Pipeline</button>
+            </div>
+            <div id="statusIndicator" class="status-indicator">
+                <div class="status-dot"></div>
+                <span id="statusText">System Ready</span>
+            </div>
+        </aside>
 
-    <div class="container">
-        <h1>Multi-Agent Outreach System</h1>
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h1>Outreach Dashboard</h1>
+                <div class="user-profile">
+                    <div class="avatar">MA</div>
+                </div>
+            </header>
 
-        <input type="file" id="fileInput" accept=".xlsx,.xls" />
-        <button onclick="uploadFile()">Upload & Process</button>
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Total Leads</span>
+                    <span id="statTotal" class="stat-value">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Successful</span>
+                    <span id="statSuccess" class="stat-value text-success">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Avg Latency</span>
+                    <span id="statLatency" class="stat-value">0ms</span>
+                </div>
+            </section>
 
-        <div id="status"></div>
-
-        <h2>Results</h2>
-        <pre id="output"></pre>
+            <section class="results-table-container">
+                <table id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>Company & Industry</th>
+                            <th>Business Intelligence</th>
+                            <th>Contact Info</th>
+                            <th>Outreach Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                        <!-- Dynamic rows here -->
+                    </tbody>
+                </table>
+                <div id="emptyState" class="empty-state">
+                    <div class="empty-icon">📂</div>
+                    <p>No data processed yet. Upload a file to see results.</p>
+                </div>
+                <div id="loader" class="loader hidden">
+                    <div class="spinner"></div>
+                    <p>Analyzing leads...</p>
+                </div>
+            </section>
+        </main>
     </div>
 
     <script src="script.js"></script>
