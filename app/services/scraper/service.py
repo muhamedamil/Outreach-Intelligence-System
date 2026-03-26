@@ -52,8 +52,14 @@ async def scrape_url(url: str) -> Dict:
         text = extract_text(html)
 
         if not text:
-            logger.warning(f"Extraction yielded empty text for: {url}")
-            return {"url": url, "content": "", "success": False}
+            logger.warning(f"Extraction yielded minimal text for: {url} (preserving HTML for link extraction)")
+            # Still return success=True if we have HTML, so we can extract links in fallback paths
+            return {
+                "url": url,
+                "content": "",
+                "html": html,
+                "success": True
+            }
 
         logger.info(f"Successfully extracted {len(text)} chars from {url}")
         return {

@@ -138,30 +138,32 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
         # Add search pages themselves to the usable content pool
         scraped.extend(search_scraped)
         
+        # Extract organic links to follow
         urls = []
         for s in search_scraped:
              if s.get("success"):
-                  # Extract actual organic links from search HTML (MUST use html, not content)
                   found_links = extract_links(s.get("html", ""))
-                  urls.extend(found_links[:3]) # take top 3 from each
+                  urls.extend(found_links[:3]) 
         
-        # If no links found, at least use the search pages themselves
-        if not urls:
-             urls = search_pages
+        # Deduplicate organic links
+        urls = list(dict.fromkeys(urls))
+        
+        # REMOVE search pages from urls list so we don't re-scrape them line 163
+        # We already have their content in 'scraped'
+        urls = [u for u in urls if u not in search_pages]
     
-    urls = list(dict.fromkeys(urls))
-    logger.info(f"Unique URLs found: {len(urls)} -> {urls}")
+    logger.info(f"Organic links to follow: {len(urls)} -> {urls}")
 
-    if not urls and not scraped:
+    # SCRAPE ORGANIC LINKS (IF ANY)
+    if urls:
+        logger.info(f"Following {len(urls)} lead links...")
+        followed_scraped = await scrape_multiple(urls)
+        scraped.extend(followed_scraped)
+
+    if not scraped:
         return BusinessProfile(
             company_name=company, location=location, confidence_score=0.0, sources=[]
         )
-
-    # SCRAPE (LIMITED + ASYNC)
-    if urls:
-        logger.info(f"Scraping {len(urls)} URLs...")
-        new_scraped = await scrape_multiple(urls)
-        scraped.extend(new_scraped)
 
     # MERGE TAVILY CONTENT IF SCRAPE FAILED
     # If a URL failed to scrape but Tavily has content, use Tavily's version
