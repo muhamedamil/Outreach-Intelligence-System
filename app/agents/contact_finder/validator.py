@@ -17,28 +17,47 @@ def normalize_phone(phone: Optional[str]) -> Optional[str]:
     if not phone:
         return None
 
-    phone = phone.strip().replace(" ", "").replace("-", "")
+    phone = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    
+    # Clean non-digits
+    phone = "".join(filter(str.isdigit, phone))
+
+    if len(phone) < 10:
+        return None
 
     # Basic normalization for Indian numbers
     if phone.startswith("0") and len(phone) == 11:
         phone = "+91" + phone[1:]
-    elif len(phone) == 10 and phone.isdigit():
+    elif len(phone) == 10:
         phone = "+91" + phone
+    elif phone.startswith("91") and len(phone) == 12:
+        phone = "+" + phone
 
     return phone
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
     """
-    Normalize email:
-    - Lowercase
-    - Strip spaces
+    Normalize and filter emails:
+    - Lowercase, Strip
+    - Blacklist generic/place-holder emails
     """
-
     if not email:
         return None
 
-    return email.strip().lower()
+    email = email.strip().lower()
+
+    # Strict Blacklist for placeholder emails
+    blacklist = [
+        "a@gmail.com", "test@gmail.com", "admin@gmail.com", 
+        "info@gmail.com", "support@gmail.com", "xyz@gmail.com",
+        "email@example.com", "[email protected]"
+    ]
+    
+    if any(b in email for b in blacklist) or len(email) < 5:
+        return None
+
+    return email
 
 
 # -------------------------

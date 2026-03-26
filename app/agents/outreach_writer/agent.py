@@ -10,6 +10,9 @@ from app.agents.outreach_writer.prompt import build_outreach_prompt
 from app.agents.outreach_writer.formatter import clean_message
 
 from app.services.llm.client import llm_generate
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # PERSONALIZATION SIGNALS
@@ -83,9 +86,11 @@ async def run_outreach_writer(
     profile: BusinessProfile,
     contact: Optional[ContactCard]
 ) -> OutreachMessage:
+    logger.info("--- OUTREACH WRITER START ---")
 
     # VALIDATION
     if not profile:
+        logger.warning("Outreach writer received empty profile, aborting.")
         return OutreachMessage(
             message="Unable to generate outreach message.",
             personalization_factors=[]
@@ -99,10 +104,12 @@ async def run_outreach_writer(
 
     # LLM GENERATION
     llm_output = None
+    logger.info(f"Generating outreach message for {profile.company_name} (has_contact={has_contact})")
 
     try:
         llm_output = await llm_generate(prompt)
-    except Exception:
+    except Exception as e:
+        logger.error(f"LLM outreach generation failed: {str(e)}")
         llm_output = None
 
     # OUTPUT HANDLING
@@ -117,6 +124,7 @@ async def run_outreach_writer(
     # PERSONALIZATION METADATA
     factors = extract_personalization(profile)
 
+    logger.info(f"--- OUTREACH WRITER END | Personalized factors: {factors} ---")
     return OutreachMessage(
         message=message,
         tone="whatsapp",

@@ -6,7 +6,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.file_processor.excel_processor import process_excel
 from app.utils.response_formatter import format_final_response
-from app.api.schema import BatchResponse
+from app.api.schemas import BatchResponse
 from app.utils.logger import get_logger
 from app.config.settings import settings
 
@@ -14,7 +14,7 @@ from app.config.settings import settings
 router = APIRouter()
 logger = get_logger(__name__)
 
-MAX_FILE_SIZE = 5 * 1024 * 1024  
+MAX_FILE_SIZE = 5 * 1024 * 1024
 
 
 @router.get("/health")
@@ -45,10 +45,7 @@ async def upload_file(file: UploadFile = File(...)):
         logger.info(f"File uploaded: {file.filename}")
 
         # Timeout protection
-        results = await asyncio.wait_for(
-            process_excel(temp_path),
-            timeout=120
-        )
+        results = await asyncio.wait_for(process_excel(temp_path), timeout=3600)
 
         total_time = round((time.time() - start_time), 2)
 
@@ -56,9 +53,7 @@ async def upload_file(file: UploadFile = File(...)):
 
         # Optional debug info
         if settings.DEBUG:
-            response["debug"] = {
-                "processing_time": total_time
-            }
+            response["debug"] = {"processing_time": total_time}
 
         logger.info(f"Processing completed in {total_time}s")
 

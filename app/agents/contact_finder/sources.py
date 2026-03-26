@@ -18,7 +18,8 @@ def normalize_website(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
 
-    url = url.strip()
+    # Cast to string in case it's a pydantic.Url object
+    url = str(url).strip()
 
     # Add scheme if missing
     if not url.startswith(("http://", "https://")):
