@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.config.settings import settings
@@ -45,11 +46,5 @@ async def shutdown_event():
     logger.info("Application shutdown")
 
 
-# ROOT ENDPOINT
-@app.get("/")
-async def root():
-    return {
-        "message": "Multi-Agent Outreach System API",
-        "status": "running",
-        "docs": "/docs"
-    }
+# SERVE FRONTEND
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
