@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     # LLM CONFIG
     # -------------------------
     LLM_API_KEY: str = Field(..., env="LLM_API_KEY")
-    LLM_MODEL: str = "gpt-4o-mini"
+    LLM_MODEL: str = "llama-3.1-8b-instant"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 500
-    LLM_TIMEOUT: int = 15
+    LLM_TIMEOUT: int = 30
     LLM_MAX_RETRIES: int = 2
 
     # -------------------------
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # -------------------------
     SCRAPER_TIMEOUT: int = 10
     SCRAPER_RETRIES: int = 2
-    SCRAPER_CONCURRENCY: int = 5
+    SCRAPER_CONCURRENCY: int = 7    
 
     class Config:
         env_file = ".env"
