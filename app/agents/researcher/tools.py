@@ -7,13 +7,10 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Initialize Tavily Client
-try:
-    api_key = settings.TAVILY_API_KEY.strip() if settings.TAVILY_API_KEY else None
-    tavily = TavilyClient(api_key=api_key)
-except Exception as e:
-    logger.error(f"Failed to initialize Tavily client: {e}")
-    tavily = None
+import httpx
+
+# Initialize settings-based key
+TAVILY_API_URL = "https://api.tavily.com/search"
 
 async def search_tavily(
     query: str, 
@@ -23,51 +20,56 @@ async def search_tavily(
     include_answer: bool = True
 ) -> List[dict]:
     """
-    Search using Tavily API and return a list of result dictionaries.
+    Search using Tavily API via direct httpx call.
     """
-    if not tavily:
-        logger.error("Tavily client not initialized. Cannot perform search.")
+    api_key = settings.TAVILY_API_KEY.strip() if settings.TAVILY_API_KEY else None
+    
+    if not api_key:
+        logger.error("TAVILY_API_KEY is missing. Cannot perform search.")
         return []
 
     logger.info(f"search_tavily starting query: {query} (depth: {search_depth})")
     
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": search_depth,
+        "max_results": max_results,
+        "include_raw_content": include_raw,
+        "include_answer": include_answer
+    }
+
     try:
-        response = tavily.search(
-            query=query, 
-            search_depth=search_depth, 
-            max_results=max_results,
-            include_raw_content=include_raw,
-            include_answer=include_answer
-        )
-        
-        results = response.get("results", [])
-        answer = response.get("answer")
-        
-        # Inject the synthesized answer into the results for easier extraction
-        if answer and results:
-            results[0]["answer"] = answer
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(TAVILY_API_URL, json=payload)
             
-        logger.info(f"Tavily returned {len(results)} results.")
-        return results
-        
+            if response.status_code != 200:
+                logger.error(f"Tavily API error: {response.status_code} | {response.text}")
+                
+                # Fallback to basic if advanced failed (common for 432/subscription errors)
+                if search_depth == "advanced" and response.status_code != 401:
+                    logger.info("Retrying with basic search depth...")
+                    payload["search_depth"] = "basic"
+                    basic_resp = await client.post(TAVILY_API_URL, json=payload)
+                    if basic_resp.status_code == 200:
+                        response = basic_resp
+                    else:
+                        return []
+                else:
+                    return []
+
+            data = response.json()
+            results = data.get("results", [])
+            answer = data.get("answer")
+            
+            if answer and results:
+                results[0]["answer"] = answer
+                
+            logger.info(f"Tavily returned {len(results)} results.")
+            return results
+            
     except Exception as e:
-        logger.error(f"Tavily search error ({search_depth}): {str(e)}")
-        
-        # Fallback to basic if advanced failed (common for 432/subscription errors)
-        if search_depth == "advanced":
-            logger.info("Retrying with basic search depth...")
-            try:
-                response = tavily.search(
-                    query=query, 
-                    search_depth="basic", 
-                    max_results=max_results,
-                    include_raw_content=include_raw,
-                    include_answer=include_answer
-                )
-                return response.get("results", [])
-            except Exception as basic_e:
-                logger.error(f"Tavily basic search also failed: {str(basic_e)}")
-        
+        logger.error(f"Tavily request failed: {str(e)}")
         return []
 
 # Deprecated: keeping for reference during migration if needed

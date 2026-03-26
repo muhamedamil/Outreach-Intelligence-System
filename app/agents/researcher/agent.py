@@ -7,6 +7,7 @@ from app.agents.researcher.prompt import build_prompt
 from app.agents.researcher.parser import safe_parse_json
 
 from app.services.scraper.service import scrape_multiple
+from app.services.scraper.parser import extract_links
 from app.agents.contact_finder.sources import build_directory_urls
 from app.services.llm.client import llm_generate
 from app.models.business import SizeSignals, DigitalPresence, ToolsDetected, BusinessProfile, Source
@@ -127,7 +128,22 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
     # FALLBACK to manual search if Tavily failed
     if not urls:
         logger.warning("Tavily search yielded no URLs. Falling back to directory search...")
-        urls = build_directory_urls(company, location)
+        search_pages = build_directory_urls(company, location)
+        
+        # Scrape search pages to find actual organic links
+        logger.info(f"Scraping search engine pages for organic links...")
+        search_scraped = await scrape_multiple(search_pages)
+        
+        urls = []
+        for s in search_scraped:
+             if s.get("success"):
+                  # Extract actual organic links from search HTML
+                  found_links = extract_links(s.get("content", ""))
+                  urls.extend(found_links[:3]) # take top 3 from each
+        
+        # If no links found, at least use the search pages themselves
+        if not urls:
+             urls = search_pages
     
     urls = list(dict.fromkeys(urls))
     logger.info(f"Unique URLs found: {len(urls)} -> {urls}")
@@ -138,7 +154,7 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
         )
 
     # SCRAPE (LIMITED + ASYNC)
-    logger.info(f"Scraping URLs...")
+    logger.info(f"Scraping {len(urls)} URLs...")
     scraped = await scrape_multiple(urls)
 
     # MERGE TAVILY CONTENT IF SCRAPE FAILED
