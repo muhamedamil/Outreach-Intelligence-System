@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import asyncio
+import tempfile
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.file_processor.excel_processor import process_excel
@@ -31,7 +32,8 @@ async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
-    temp_path = f"temp_{uuid.uuid4()}.xlsx"
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, f"temp_{uuid.uuid4()}.xlsx")
 
     try:
         contents = await file.read()
