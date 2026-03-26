@@ -40,8 +40,12 @@ async def search_tavily(
     }
 
     try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Content-Type": "application/json"
+        }
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(TAVILY_API_URL, json=payload)
+            response = await client.post(TAVILY_API_URL, json=payload, headers=headers)
             
             if response.status_code != 200:
                 logger.error(f"Tavily API error: {response.status_code} | {response.text}")
