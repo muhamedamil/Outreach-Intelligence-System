@@ -25,13 +25,13 @@ def get_source_reliability(url: str) -> float:
 
 
 # CONTEXT BUILDER
-def build_context(scraped: List[dict], max_sources: int = 3) -> str:
+def build_context(scraped: List[dict], max_sources: int = 5) -> str:
     chunks = []
 
     for s in scraped[:max_sources]:
         content = s.get("content", "")
         if content:
-            chunks.append(content[:1500])
+            chunks.append(content[:5000])
 
     return "\n\n".join(chunks)
 

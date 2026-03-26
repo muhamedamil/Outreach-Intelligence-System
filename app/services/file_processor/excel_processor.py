@@ -5,6 +5,9 @@ import asyncio
 import time
 from typing import List, Dict
 
+# Optimization: silence future warnings
+pd.set_option('future.no_silent_downcasting', True)
+
 from app.orchestrator.pipeline import OutreachPipeline
 from app.orchestrator.state import PipelineState
 from app.config.settings import settings

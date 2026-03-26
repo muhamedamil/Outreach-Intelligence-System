@@ -56,7 +56,12 @@ async def scrape_url(url: str) -> Dict:
             return {"url": url, "content": "", "success": False}
 
         logger.info(f"Successfully extracted {len(text)} chars from {url}")
-        return {"url": url, "content": text, "success": True}
+        return {
+            "url": url, 
+            "content": text, 
+            "html": html, 
+            "success": True
+        }
 
 
 async def scrape_multiple(urls: List[str]) -> List[Dict]:
