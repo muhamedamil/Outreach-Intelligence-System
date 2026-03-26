@@ -126,47 +126,50 @@ class OutreachPipeline:
 
         # STEP 3: OUTREACH WRITER
 
-        if not state.research:
-            state.outreach = None
+        # STEP 3: OUTREACH WRITER
+
+        # Determine profile to use (use research result or basic input if research failed)
+        profile_to_use = state.research
+        if not profile_to_use:
+             from app.models.business import BusinessProfile
+             profile_to_use = BusinessProfile(
+                 company_name=state.input.get("company_name", "unknown"),
+                 location=state.input.get("location", ""),
+                 confidence_score=0.0,
+                 sources=[]
+             )
+
+        contact_status = state.contact.status.value if state.contact else "NOT_FOUND"
+
+        no_contact = contact_status == "NOT_FOUND"
+
+        outreach_result = await self.executor.run(
+            "outreach_writer",
+            run_outreach_writer,
+            profile_to_use,
+            None if no_contact else state.contact
+        )
+
+        if outreach_result.success and outreach_result.result:
+            state.outreach = outreach_result.result
 
             state.trace.append({
                 "step": "outreach_writer",
-                "status": "skipped",
-                "reason": "no research data"
+                "status": "success",
+                "mode": "fallback" if no_contact else "full",
+                "latency_ms": getattr(outreach_result, "latency", None)
             })
 
         else:
-            contact_status = state.contact.status.value if state.contact else "NOT_FOUND"
+            state.outreach = None
 
-            no_contact = contact_status == "NOT_FOUND"
+            state.errors.append(outreach_result.error or "outreach failed")
 
-            outreach_result = await self.executor.run(
-                "outreach_writer",
-                run_outreach_writer,
-                state.research,
-                None if no_contact else state.contact
-            )
-
-            if outreach_result.success and outreach_result.result:
-                state.outreach = outreach_result.result
-
-                state.trace.append({
-                    "step": "outreach_writer",
-                    "status": "success",
-                    "mode": "fallback" if no_contact else "full",
-                    "latency_ms": getattr(outreach_result, "latency", None)
-                })
-
-            else:
-                state.outreach = None
-
-                state.errors.append(outreach_result.error or "outreach failed")
-
-                state.trace.append({
-                    "step": "outreach_writer",
-                    "status": "failed",
-                    "error": outreach_result.error
-                })
+            state.trace.append({
+                "step": "outreach_writer",
+                "status": "failed",
+                "error": outreach_result.error
+            })
 
         # FINAL PIPELINE STATUS
 

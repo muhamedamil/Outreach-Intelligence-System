@@ -117,6 +117,7 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
         )
 
     query = f"{company} {location} business details"
+    scraped = []
 
     # SEARCH
     logger.info(f"Searching Tavily for: '{query}'")
@@ -151,14 +152,16 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
     urls = list(dict.fromkeys(urls))
     logger.info(f"Unique URLs found: {len(urls)} -> {urls}")
 
-    if not urls:
+    if not urls and not scraped:
         return BusinessProfile(
             company_name=company, location=location, confidence_score=0.0, sources=[]
         )
 
     # SCRAPE (LIMITED + ASYNC)
-    logger.info(f"Scraping {len(urls)} URLs...")
-    scraped = await scrape_multiple(urls)
+    if urls:
+        logger.info(f"Scraping {len(urls)} URLs...")
+        new_scraped = await scrape_multiple(urls)
+        scraped.extend(new_scraped)
 
     # MERGE TAVILY CONTENT IF SCRAPE FAILED
     # If a URL failed to scrape but Tavily has content, use Tavily's version
