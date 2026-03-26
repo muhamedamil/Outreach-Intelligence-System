@@ -1,4 +1,4 @@
-# 🌌 Antigravity Outreach Intelligence System
+# 🌌Outreach Intelligence System
 
 **The 0.01% Standard Multi-Agent Lead Research & Outreach Pipeline.**
 
