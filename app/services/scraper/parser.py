@@ -42,18 +42,25 @@ def extract_links(html: str) -> list:
     
     # Common patterns for organic links in search pages
     for a in soup.find_all("a", href=True):
-        url = a["href"]
+        raw_url = a["href"]
+        url = raw_url
         
         # Clean Google 'url?q=' wraps
         if "/url?q=" in url:
              try:
-                 parsed = urlparse(url)
-                 url = parse_qs(parsed.query).get("q", [url])[0]
+                  parsed = urlparse(url)
+                  url = parse_qs(parsed.query).get("q", [url])[0]
              except Exception:
-                 pass
-             
-        # Filter out junk and own domain
-        if url.startswith("http") and not any(x in url for x in ["google.com", "gstatic.com", "search?", "support.google.com", "accounts.google.com", "maps.google.com"]):
+                  pass
+              
+        # Filter out junk and internal engine links
+        is_internal = any(x in url.lower() for x in ["google.com/search", "google.com/maps", "googleadservices", "webcache.googleusercontent", "google.com/shopping"])
+        
+        if url.startswith("http") and not is_internal:
+            # Avoid obvious navigational links
+            if any(x in url.lower() for x in ["support.google", "accounts.google", "policies.google", "github.com/google"]):
+                 continue
+            
             links.append(url)
             
     return list(dict.fromkeys(links))  # deduplicate

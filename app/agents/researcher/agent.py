@@ -143,6 +143,7 @@ async def run_researcher(input_data: dict) -> BusinessProfile:
         for s in search_scraped:
              if s.get("success"):
                   found_links = extract_links(s.get("html", ""))
+                  logger.info(f"Found {len(found_links)} organic links on {s.get('url')}")
                   urls.extend(found_links[:3]) 
         
         # Deduplicate organic links
