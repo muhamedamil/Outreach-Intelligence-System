@@ -12,9 +12,7 @@ from app.agents.outreach_writer.formatter import clean_message
 from app.services.llm.client import llm_generate
 
 
-# -------------------------
 # PERSONALIZATION SIGNALS
-# -------------------------
 def extract_personalization(profile: BusinessProfile) -> List[str]:
     factors = []
 
@@ -42,9 +40,7 @@ def extract_personalization(profile: BusinessProfile) -> List[str]:
     return factors
 
 
-# -------------------------
 # FALLBACK MESSAGE
-# -------------------------
 def fallback_message(profile: BusinessProfile, no_contact: bool) -> str:
     name = profile.company_name or "your business"
 
@@ -63,9 +59,7 @@ def fallback_message(profile: BusinessProfile, no_contact: bool) -> str:
     return message
 
 
-# -------------------------
 # SAFETY CHECK
-# -------------------------
 def is_valid_message(text: str) -> bool:
     """
     Basic sanity checks for LLM output
@@ -84,17 +78,13 @@ def is_valid_message(text: str) -> bool:
     return True
 
 
-# -------------------------
 # MAIN AGENT
-# -------------------------
 async def run_outreach_writer(
     profile: BusinessProfile,
     contact: Optional[ContactCard]
 ) -> OutreachMessage:
 
-    # -------------------------
     # VALIDATION
-    # -------------------------
     if not profile:
         return OutreachMessage(
             message="Unable to generate outreach message.",
@@ -104,14 +94,10 @@ async def run_outreach_writer(
     has_contact = bool(contact and contact.status.value != "NOT_FOUND")
     no_contact = not has_contact
 
-    # -------------------------
     # BUILD PROMPT
-    # -------------------------
     prompt = build_outreach_prompt(profile, has_contact)
 
-    # -------------------------
     # LLM GENERATION
-    # -------------------------
     llm_output = None
 
     try:
@@ -119,9 +105,7 @@ async def run_outreach_writer(
     except Exception:
         llm_output = None
 
-    # -------------------------
     # OUTPUT HANDLING
-    # -------------------------
     if llm_output:
         message = clean_message(llm_output)
 
@@ -130,9 +114,7 @@ async def run_outreach_writer(
     else:
         message = fallback_message(profile, no_contact)
 
-    # -------------------------
     # PERSONALIZATION METADATA
-    # -------------------------
     factors = extract_personalization(profile)
 
     return OutreachMessage(
