@@ -5,6 +5,9 @@ from typing import List, Dict
 
 from app.services.scraper.fetcher import fetch_html
 from app.services.scraper.parser import extract_text
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Limit concurrency to avoid blocking / rate limiting
@@ -35,19 +38,24 @@ async def scrape_url(url: str) -> Dict:
     """
 
     if not is_valid_url(url):
+        logger.warning(f"Skipping scrape for invalid or blocked URL: {url}")
         return {"url": url, "content": "", "success": False}
 
+    logger.info(f"Starting scrape for URL: {url}")
     async with SEMAPHORE:
         html = await fetch_html(url)
 
         if not html:
+            logger.warning(f"Scrape resulted in empty HTML for: {url}")
             return {"url": url, "content": "", "success": False}
 
         text = extract_text(html)
 
         if not text:
+            logger.warning(f"Extraction yielded empty text for: {url}")
             return {"url": url, "content": "", "success": False}
 
+        logger.info(f"Successfully extracted {len(text)} chars from {url}")
         return {"url": url, "content": text, "success": True}
 
 
@@ -57,6 +65,7 @@ async def scrape_multiple(urls: List[str]) -> List[Dict]:
     """
 
     if not urls:
+        logger.warning("scrape_multiple called with empty URLs list.")
         return []
 
     # Deduplicate URLs
@@ -71,5 +80,8 @@ async def scrape_multiple(urls: List[str]) -> List[Dict]:
     for result in results:
         if isinstance(result, dict) and result.get("success"):
             cleaned_results.append(result)
+        elif isinstance(result, Exception):
+            logger.error(f"scrape_multiple task exception: {result}")
 
+    logger.info(f"scrape_multiple finished with {len(cleaned_results)} successful scrapes out of {len(tasks)} tasks.")
     return cleaned_results
