@@ -3,8 +3,22 @@
 # "Top 1%" Data Model for Universal Lead Intelligence (Salon & Solar).
 # Built to match the EXACT output schema of compass/crawler-google-places
 # and enriched by our local Playwright website analyzer.
+#
+# PYDANTIC 2.7.4 HARDENING STRATEGY (three layers):
+#
+#   Layer 1 — model_validator(mode="before")
+#     Cleans raw input data BEFORE field assignment. Handles 90% of cases.
+#
+#   Layer 2 — field_validator(mode="before") with EXPLICIT field names
+#     Per-field safety net. NEVER use wildcard "*" — unreliable in 2.7.x.
+#
+#   Layer 3 — field_serializer(when_used="always")
+#     The final guarantee: forces correct types AT SERIALIZATION TIME.
+#     This catches anything that slips through layers 1 & 2 (e.g. direct
+#     dict-item assignments like lead.lead_score_breakdown["x"] = v which
+#     Pydantic's validate_assignment does NOT intercept).
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator, model_validator, field_serializer
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 
@@ -35,7 +49,51 @@ class WebsiteStatus(str, Enum):
 
 
 # ─────────────────────────────────────────────
-# SUB-MODELS (for nested Apify data)
+# SHARED HELPERS
+# ─────────────────────────────────────────────
+
+def _to_int(v: Any, default: int = 0) -> int:
+    """Safely cast any Apify value to int — handles None, dicts, strings, floats."""
+    if v is None:
+        return default
+    if isinstance(v, dict):
+        for key in ("count", "value", "total", "stars", "score"):
+            if key in v:
+                return _to_int(v[key], default)
+        return default
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        return default
+
+
+def _to_opt_float(v: Any) -> Optional[float]:
+    """Safely cast any Apify value to Optional[float]."""
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        for key in ("value", "total", "rating", "score"):
+            if key in v:
+                return _to_opt_float(v[key])
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _clean_int_dict(v: Any) -> Dict[str, int]:
+    """Ensure a dict has str keys and int values."""
+    if not isinstance(v, dict):
+        return {}
+    cleaned: Dict[str, int] = {}
+    for k, val in v.items():
+        cleaned[str(k)] = _to_int(val)
+    return cleaned
+
+
+# ─────────────────────────────────────────────
+# SUB-MODELS
 # ─────────────────────────────────────────────
 
 class ReviewDistribution(BaseModel):
@@ -45,35 +103,53 @@ class ReviewDistribution(BaseModel):
     three_star: int = 0
     four_star: int = 0
     five_star: int = 0
-    
-    @field_validator("*", mode="before")
+
+    model_config = {"validate_assignment": True}
+
+    # ── Layer 1: Pre-clean ALL incoming data before field assignment ──
+    @model_validator(mode="before")
     @classmethod
-    def ensure_int(cls, v: Any) -> int:
-        if isinstance(v, dict):
-            return int(v.get("count", v.get("value", 0)))
-        try:
-            return int(v or 0)
-        except (ValueError, TypeError):
-            return 0
+    def _pre_clean(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return {k: _to_int(v) for k, v in data.items()}
+
+    # ── Layer 2: Explicit per-field validators (no wildcard) ──
+    @field_validator("one_star", "two_star", "three_star", "four_star", "five_star", mode="before")
+    @classmethod
+    def _ensure_int(cls, v: Any) -> int:
+        return _to_int(v)
+
+    # ── Layer 3: Force correct type at serialization — THE KEY FIX ──
+    @field_serializer("one_star", "two_star", "three_star", "four_star", "five_star", when_used="always")
+    def _serialize_star(self, v: Any) -> int:
+        return _to_int(v)
 
 
 class Review(BaseModel):
     """Individual Google review — used for sentiment analysis."""
+    # ── ALL FIELDS defined BEFORE validators (required in Pydantic 2.7.x) ──
     reviewer_name: Optional[str] = None
     text: Optional[str] = None
     stars: Optional[int] = None
-    
+    published_at: Optional[str] = None
+
+    model_config = {"validate_assignment": True}
+
+    # ── Layer 2: stars validator ──
     @field_validator("stars", mode="before")
     @classmethod
-    def ensure_int(cls, v: Any) -> Optional[int]:
-        if v is None: return None
-        if isinstance(v, dict):
-            return int(v.get("count", v.get("value", 0)))
-        try:
-            return int(v)
-        except (ValueError, TypeError):
+    def _ensure_stars(cls, v: Any) -> Optional[int]:
+        if v is None:
             return None
-    published_at: Optional[str] = None
+        return _to_int(v) or None
+
+    # ── Layer 3: Force int at serialization ──
+    @field_serializer("stars", when_used="always")
+    def _serialize_stars(self, v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        return _to_int(v) or None
 
 
 class OpeningHoursEntry(BaseModel):
@@ -89,24 +165,24 @@ class OpeningHoursEntry(BaseModel):
 class LeadProfile(BaseModel):
     """
     The complete Universal Lead intelligence model.
-    
+
     Data sources:
-        - Apify (compass/crawler-google-places): name, phone, address, 
-          website, rating, reviews, categories, opening hours, 
+        - Apify (compass/crawler-google-places): name, phone, address,
+          website, rating, reviews, categories, opening hours,
           booking links, reservation URLs, Google Maps URL, place_id
-        - Playwright (website_analyzer.py): category determination, 
-          WhatsApp detection, social media extraction, lead scoring
+        - Playwright (website_analyzer.py): category determination,
+          social media extraction, lead scoring
     """
 
-    # ── IDENTITY (from Apify) ──
+    # ── IDENTITY ──
     name: str
-    industry: str = "salon"  # Default to salon, can be set to "solar"
+    industry: str = "salon"
     place_id: Optional[str] = None
     google_maps_url: Optional[str] = None
     google_category: Optional[str] = None
     all_categories: List[str] = []
 
-    # ── CONTACT (from Apify + Playwright backup) ──
+    # ── CONTACT ──
     phone: Optional[str] = None
     phone_unformatted: Optional[str] = None
     address: Optional[str] = None
@@ -117,42 +193,46 @@ class LeadProfile(BaseModel):
     country_code: Optional[str] = "US"
     neighborhood: Optional[str] = None
 
-    # ── DIGITAL PRESENCE (from Apify) ──
+    # ── DIGITAL PRESENCE ──
     website_url: Optional[str] = None
     website_status: WebsiteStatus = WebsiteStatus.NONE
-    
-    # ── RATINGS & REVIEWS (from Apify) ──
+
+    # ── RATINGS & REVIEWS ──
     google_rating: Optional[float] = None
     google_review_count: int = 0
     reviews_distribution: Optional[ReviewDistribution] = None
     reviews: List[Review] = []
     review_tags: List[Dict[str, Any]] = []
 
-    # ── BOOKING SIGNALS (from Apify + Playwright) ──
+    # ── BOOKING SIGNALS ──
     reserve_table_url: Optional[str] = None
-    booking_links: List[Dict[str, str]] = []
-    order_links: List[Dict[str, str]] = []
+    # NOTE: declared as List[Dict[str, Any]] — Apify returns mixed-type values.
+    # Declaring as Dict[str, str] caused silent serialization warnings in 2.7.4.
+    booking_links: List[Dict[str, Any]] = []
+    order_links: List[Dict[str, Any]] = []
 
-    # ── THE "3 BUCKETS" LOGIC ──
+    # ── 3-BUCKET CLASSIFICATION ──
     category: LeadCategory = LeadCategory.NO_WEBSITE
     booking_system: Optional[str] = None
 
-    # ── WHATSAPP & SOCIAL (from Playwright) ──
+    # ── SOCIAL / CONTACT CHANNELS ──
     whatsapp_status: WhatsAppStatus = WhatsAppStatus.UNVERIFIED
     whatsapp_number: Optional[str] = None
+    whatsapp_confidence: str = "LOW"
+    whatsapp_found_on_web: bool = False
     instagram_url: Optional[str] = None
     facebook_url: Optional[str] = None
     tiktok_url: Optional[str] = None
     youtube_url: Optional[str] = None
     yelp_url: Optional[str] = None
 
-    # ── BUSINESS STATUS (from Apify) ──
+    # ── BUSINESS STATUS ──
     permanently_closed: bool = False
     temporarily_closed: bool = False
     claim_this_business: bool = False
     opening_hours: List[OpeningHoursEntry] = []
 
-    # ── LEAD QUALITY (computed by our system) ──
+    # ── LEAD QUALITY ──
     negative_review_signals: List[str] = []
     lead_score: int = 0
     lead_score_breakdown: Dict[str, int] = {}
@@ -163,58 +243,36 @@ class LeadProfile(BaseModel):
 
     model_config = {
         "validate_assignment": True,
-        "populate_by_name": True
+        "populate_by_name": True,
     }
 
-    # ─────────────────────────────────────────────
-    # PRO-GRADE HARDENING: Advanced Field Validators
-    # (Captures edge cases where APIs return dicts instead of ints)
-    # ─────────────────────────────────────────────
-
-    @field_validator("google_rating", "google_review_count", "lead_score", mode="before")
+    # ── Layer 2: Numeric field validators ──
+    @field_validator("google_review_count", "lead_score", mode="before")
     @classmethod
-    def ensure_numeric(cls, v: Any, info: Any) -> Union[int, float, None]:
-        """Strictly cast numeric fields to resolve 'Expected int but got dict' warnings."""
-        field_name = info.field_name
-        
-        if v is None:
-            # Counts and scores default to 0, ratings to None
-            return 0 if "count" in field_name or "score" in field_name else None
-        
-        # If the input is a dictionary (common Apify actor bug)
-        if isinstance(v, dict):
-            # Try to extract common keys like 'count', 'value', 'score', 'total', 'rating', or the field name itself
-            for key in ["count", "value", "score", "total", "rating", "totalScore", field_name]:
-                if key in v:
-                    val = v[key]
-                    # Recursive check just in case it's a dict within a dict
-                    return cls.ensure_numeric(val, info)
-            return 0 # Fallback for unknown dict structure
-            
-        try:
-            # Cast based on field type
-            if field_name == "google_rating":
-                return float(v)
-            return int(float(v)) # Handle "10.0" as string
-        except (ValueError, TypeError):
-            return 0 if "count" in field_name or "score" in field_name else None
+    def _ensure_int(cls, v: Any) -> int:
+        return _to_int(v)
+
+    @field_validator("google_rating", mode="before")
+    @classmethod
+    def _ensure_float(cls, v: Any) -> Optional[float]:
+        return _to_opt_float(v)
 
     @field_validator("lead_score_breakdown", mode="before")
     @classmethod
-    def ensure_valid_breakdown(cls, v: Any) -> Dict[str, int]:
-        """Ensure lead_score_breakdown is always a clean Dict[str, int]."""
-        if not isinstance(v, dict):
-            return {}
-        
-        # Clean the values to ensure they are all integers
-        cleaned = {}
-        for key, value in v.items():
-            if isinstance(value, dict):
-                # Another nested dict edge case
-                cleaned[str(key)] = int(value.get("value", value.get("count", 0)))
-            else:
-                try:
-                    cleaned[str(key)] = int(value)
-                except (ValueError, TypeError):
-                    cleaned[str(key)] = 0
-        return cleaned
+    def _ensure_breakdown(cls, v: Any) -> Dict[str, int]:
+        return _clean_int_dict(v)
+
+    # ── Layer 3: Serialization-phase cast — catches dict-item assignments ──
+    # These fire even when the value was set via lead.lead_score_breakdown["x"] = v
+    # (which bypasses validate_assignment in Pydantic 2.7.x)
+    @field_serializer("google_review_count", "lead_score", when_used="always")
+    def _serialize_int(self, v: Any) -> int:
+        return _to_int(v)
+
+    @field_serializer("google_rating", when_used="always")
+    def _serialize_float(self, v: Any) -> Optional[float]:
+        return _to_opt_float(v)
+
+    @field_serializer("lead_score_breakdown", when_used="always")
+    def _serialize_breakdown(self, v: Any) -> Dict[str, int]:
+        return _clean_int_dict(v)

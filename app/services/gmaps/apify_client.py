@@ -375,6 +375,19 @@ def _map_apify_item_to_lead(item: Dict[str, Any], industry: str) -> Optional[Lea
         order_links = [ol for ol in (item.get("orderBy") or []) if isinstance(ol, dict)]
         review_tags = item.get("reviewsTags") or []
 
+        # ── NUMERIC HARDENING (Pre-cleaning) ──
+        raw_rating = item.get("totalScore")
+        if isinstance(raw_rating, dict):
+            google_rating = float(raw_rating.get("total", raw_rating.get("value", 0.0)))
+        else:
+            google_rating = float(raw_rating or 0.0)
+
+        raw_count = item.get("reviewsCount")
+        if isinstance(raw_count, dict):
+            google_review_count = int(raw_count.get("count", raw_count.get("total", 0)))
+        else:
+            google_review_count = int(raw_count or 0)
+
         return LeadProfile(
             name=item.get("title", "Unknown"),
             industry=industry,
@@ -392,8 +405,8 @@ def _map_apify_item_to_lead(item: Dict[str, Any], industry: str) -> Optional[Lea
             country_code=item.get("countryCode", "US"),
             neighborhood=item.get("neighborhood"),
             website_url=item.get("website"),
-            google_rating=item.get("totalScore") or 0.0,
-            google_review_count=item.get("reviewsCount") or 0,
+            google_rating=google_rating,
+            google_review_count=google_review_count,
             reviews_distribution=review_dist,
             reviews=reviews,
             review_tags=review_tags,

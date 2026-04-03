@@ -228,8 +228,15 @@ function openModal(index) {
             <div class="right-col">
                 <div class="info-section">
                     <h4>Generated AI Outreach</h4>
-                    <div class="outreach-box">
-                        ${(outreach.message || "No outreach generated. Check AI context.").replace(/\n/g, '<br>')}
+                    <div class="outreach-tabs">
+                        <div class="outreach-box">
+                            <small style="color:var(--accent-primary);text-transform:uppercase;font-weight:bold;display:block;margin-bottom:8px">💬 WhatsApp Draft</small>
+                            ${(outreach.whatsapp || "No WhatsApp draft generated.").replace(/\n/g, '<br>')}
+                        </div>
+                        <div class="outreach-box" style="margin-top:12px">
+                            <small style="color:var(--accent-secondary);text-transform:uppercase;font-weight:bold;display:block;margin-bottom:8px">📸 Instagram Draft</small>
+                            ${(outreach.instagram || "No Instagram draft generated.").replace(/\n/g, '<br>')}
+                        </div>
                     </div>
                 </div>
                 

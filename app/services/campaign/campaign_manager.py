@@ -22,7 +22,7 @@ if sys.platform == 'win32':
 from app.models.lead import LeadProfile
 from app.services.campaign.input_parser import parse_user_input, LeadSpec
 from app.services.gmaps.apify_client import search_leads, enrich_leads
-from app.services.scraper.website_analyzer import analyze_lead_website, verify_whatsapp_number
+from app.services.scraper.website_analyzer import analyze_lead_website
 from app.services.scraper.social_resolver import resolve_missing_socials
 from app.agents.researcher.agent import run_lead_researcher
 from app.agents.outreach_writer.agent import generate_lead_outreach
@@ -83,9 +83,8 @@ async def run_full_campaign(
         
         try:
             # LAYER 2: THE REFINER (Deterministic Technical Check)
-            # Find buckets + WhatsApp + missing socials
+            # Find buckets + missing socials (WhatsApp active verification disabled)
             lead = await analyze_lead_website(lead)
-            lead = await verify_whatsapp_number(lead)
             lead = await resolve_missing_socials(lead)
 
             # LAYER 3: THE BRAIN (AI Sentiment Hook)

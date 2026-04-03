@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = 60
     LLM_MAX_RETRIES: int = 2
     AGENT_TIMEOUT: int = 300
+    OSINT_MAX_RETRIES: int = 3
+    OSINT_TIMEOUT: int = 20
 
     # -------------------------
     # APIFY & DISCOVERY

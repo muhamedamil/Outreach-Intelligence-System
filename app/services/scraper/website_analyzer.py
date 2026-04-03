@@ -25,7 +25,7 @@ import json
 import asyncio
 import logging
 import sys
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright, Page, Browser
@@ -271,11 +271,79 @@ COOKIE_DISMISS_SELECTORS = [
 # CORE ANALYSIS ENGINE
 # ─────────────────────────────────────────────
 
+# Playwright error strings that indicate a JS-driven page navigation
+# destroyed the current execution context mid-analysis.
+_NAVIGATION_ERROR_SIGNALS = (
+    "execution context was destroyed",
+    "target page, context or browser has been closed",
+    "page has been closed",
+    "target closed",
+    "session closed",
+    "browser has been disconnected",
+)
+
+
+def _is_navigation_error(err_msg: str) -> bool:
+    """Return True if the error is caused by a mid-analysis JS navigation."""
+    low = err_msg.lower()
+    return any(sig in low for sig in _NAVIGATION_ERROR_SIGNALS)
+
+
+async def _try_recover_after_navigation(page, lead: LeadProfile) -> bool:
+    """
+    After a navigation interruption is detected, wait for the new page to
+    settle and try to classify the lead based on its final URL.
+
+    Returns True if we were able to make a classification decision
+    (caller should return lead immediately). Returns False if the new
+    page is a regular site worth continuing to analyse.
+    """
+    try:
+        # Give the new page up to 5 seconds to finish loading.
+        await asyncio.wait_for(
+            page.wait_for_load_state("domcontentloaded"), timeout=5
+        )
+    except Exception:
+        pass  # Even a partial load is useful
+
+    new_url = page.url
+    logger.info(f"[{lead.name}] Post-navigation URL: {new_url}")
+
+    # Did we land on a booking platform?
+    platform = _is_booking_platform_url(new_url)
+    if platform:
+        lead.category = LeadCategory.FULLY_AUTOMATED
+        lead.booking_system = platform
+        lead.website_status = WebsiteStatus.LIVE
+        logger.info(f"[{lead.name}] 🔀 Redirect resolved → {platform} (FULLY_AUTOMATED)")
+        return True
+
+    # Did we land on a social media page?
+    if _is_social_media_url(new_url):
+        lead.category = LeadCategory.NO_WEBSITE
+        lead.website_status = WebsiteStatus.NONE
+        lead.lead_score += 15
+        lead.lead_score_breakdown["social_redirect"] = 15
+        _extract_social_from_url(new_url, lead)
+        logger.info(f"[{lead.name}] 🔀 Redirect resolved → social media (NO_WEBSITE)")
+        return True
+
+    # Regular page redirect — we have partial data, caller keeps going
+    logger.info(f"[{lead.name}] 🔀 Mid-analysis redirect to regular page; using partial data.")
+    lead.website_status = WebsiteStatus.LIVE
+    if lead.category == LeadCategory.NO_WEBSITE:
+        lead.category = LeadCategory.STATIC_WEBSITE
+    return False
+
 
 async def analyze_lead_website(lead: LeadProfile) -> LeadProfile:
     """
     Deep website intelligence gathering using Playwright.
     Enriches a LeadProfile already populated by Apify.
+
+    Hard 60-second total budget: if the browser stalls for any reason
+    (network hang, renderer crash, infinite JS loop) we abort cleanly
+    and return whatever partial data we collected.
     """
 
     # ── Already classified by Apify as automated ──
@@ -317,195 +385,261 @@ async def analyze_lead_website(lead: LeadProfile) -> LeadProfile:
         logger.info(f"[{lead.name}] Website IS {platform}. Category: FULLY_AUTOMATED")
         return lead
 
-    # ── FULL BROWSER ANALYSIS ──
+    # ── FULL BROWSER ANALYSIS — hard 60s total budget ──
     logger.info(f"[{lead.name}] Starting browser analysis: {url}")
-
-    return await _safe_playwright_call(_browser_analyze_lead, lead, url)
+    try:
+        return await asyncio.wait_for(
+            _safe_playwright_call(_browser_analyze_lead, lead, url),
+            timeout=60,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[{lead.name}] ⏱ Analysis budget exceeded (60s). Returning partial data."
+        )
+        lead.website_status = WebsiteStatus.TIMEOUT
+        if lead.category == LeadCategory.NO_WEBSITE:
+            lead.category = LeadCategory.STATIC_WEBSITE
+        return lead
 
 
 async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
-    """Inner function that does the actual Playwright browser work."""
+    """
+    Inner function that does the actual Playwright browser work.
+
+    NAVIGATION HANDLING ARCHITECTURE:
+    Every analysis step is wrapped individually. When a JS redirect fires
+    mid-step (destroying the execution context), we detect it immediately,
+    stop wasting time on the dead context, wait for the new page to settle,
+    and try to classify the new URL before returning whatever we collected.
+    """
     async with async_playwright() as p:
         browser = None
         try:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
                 ignore_https_errors=True,
             )
             page = await context.new_page()
 
-            # ── NAVIGATION WITH FALLBACK ──
-            # Try networkidle first (best for JS-heavy sites)
-            # Fall back to domcontentloaded (faster, works for slow sites)
+            # ── PHASE 1: INITIAL NAVIGATION ──
             response = None
             try:
-                response = await page.goto(url, wait_until="networkidle", timeout=20000)
-            except Exception:
-                logger.info(
-                    f"[{lead.name}] networkidle timeout, trying domcontentloaded..."
-                )
-                try:
-                    response = await page.goto(
-                        url, wait_until="domcontentloaded", timeout=15000
-                    )
-                except Exception as nav_err:
-                    error_msg = str(nav_err).lower()
+                response = await page.goto(url, wait_until="load", timeout=25000)
+                # Let the network settle (catches late JS redirects)
+                await page.wait_for_load_state("networkidle", timeout=8000)
+                await asyncio.sleep(1.5)
+            except Exception as nav_err:
+                error_msg = str(nav_err).lower()
 
-                    # ── EDGE CASE: DNS failure / Connection refused ──
-                    if (
-                        "net::err_name_not_resolved" in error_msg
-                        or "net::err_connection_refused" in error_msg
-                    ):
-                        lead.category = LeadCategory.NO_WEBSITE
-                        lead.website_status = WebsiteStatus.DEAD
-                        lead.lead_score += 20
-                        lead.lead_score_breakdown["dead_website"] = 20
-                        logger.info(
-                            f"[{lead.name}] Website is DEAD (DNS/connection failure). Category: NO_WEBSITE"
-                        )
-                        await browser.close()
-                        return lead
-
-                    # ── EDGE CASE: Timeout ──
-                    if "timeout" in error_msg:
-                        lead.website_status = WebsiteStatus.TIMEOUT
-                        lead.lead_score += 10
-                        lead.lead_score_breakdown["slow_website"] = 10
-                        logger.info(
-                            f"[{lead.name}] Website TIMEOUT. Keeping as STATIC_WEBSITE."
-                        )
-                        await browser.close()
-                        return lead
-
-                    # ── Any other navigation error ──
-                    lead.website_status = WebsiteStatus.ERROR
-                    logger.error(f"[{lead.name}] Navigation error: {nav_err}")
+                # Dead site — DNS / connection refused
+                if (
+                    "net::err_name_not_resolved" in error_msg
+                    or "net::err_connection_refused" in error_msg
+                    or "net::err_internet_disconnected" in error_msg
+                ):
+                    lead.category = LeadCategory.NO_WEBSITE
+                    lead.website_status = WebsiteStatus.DEAD
+                    lead.lead_score += 20
+                    lead.lead_score_breakdown["dead_website"] = 20
+                    logger.info(f"[{lead.name}] DEAD (DNS/connection failure)")
                     await browser.close()
                     return lead
 
-            # ── REDIRECT TO BOOKING PLATFORM ──
+                # Timeout — site exists but too slow
+                if "timeout" in error_msg:
+                    lead.website_status = WebsiteStatus.TIMEOUT
+                    lead.category = LeadCategory.STATIC_WEBSITE
+                    lead.lead_score += 10
+                    lead.lead_score_breakdown["slow_website"] = 10
+                    logger.info(f"[{lead.name}] TIMEOUT on initial load")
+                    await browser.close()
+                    return lead
+
+                # Mid-navigation redirect (JS redirect fired during goto)
+                if _is_navigation_error(error_msg):
+                    classified = await _try_recover_after_navigation(page, lead)
+                    await browser.close()
+                    return lead
+
+                # Any other unrecoverable navigation error
+                lead.website_status = WebsiteStatus.ERROR
+                logger.warning(f"[{lead.name}] Navigation error: {nav_err}")
+                await browser.close()
+                return lead
+
+            # ── PHASE 2: POST-LOAD CLASSIFICATION ──
+
+            # Immediate redirect to booking platform?
             final_url = page.url
             redirect_platform = _is_booking_platform_url(final_url)
             if redirect_platform:
                 lead.category = LeadCategory.FULLY_AUTOMATED
                 lead.booking_system = redirect_platform
                 lead.website_status = WebsiteStatus.LIVE
-                logger.info(f"[{lead.name}] Redirected to {redirect_platform}")
+                logger.info(f"[{lead.name}] Redirected → {redirect_platform}")
                 await browser.close()
                 return lead
 
-            # ── HTTP ERROR ──
+            # HTTP errors — distinguish bot-protection (403) from real errors
             if response and response.status >= 400:
-                lead.category = LeadCategory.NO_WEBSITE
-                lead.website_status = WebsiteStatus.ERROR
-                lead.lead_score += 10
-                lead.lead_score_breakdown["broken_website"] = 10
-                logger.warning(f"[{lead.name}] HTTP {response.status}")
+                if response.status == 403:
+                    # 403 = bot protection (Cloudflare, Akamai, nginx auth)
+                    # The site EXISTS and is likely STATIC — don't kill the lead
+                    lead.category = LeadCategory.STATIC_WEBSITE
+                    lead.website_status = WebsiteStatus.CLOUDFLARE_BLOCKED
+                    lead.lead_score += 5
+                    lead.lead_score_breakdown["bot_protection_403"] = 5
+                    logger.warning(f"[{lead.name}] HTTP 403 — bot protection, treating as STATIC")
+                elif response.status == 404:
+                    lead.category = LeadCategory.NO_WEBSITE
+                    lead.website_status = WebsiteStatus.ERROR
+                    logger.warning(f"[{lead.name}] HTTP 404 — page not found")
+                else:
+                    lead.category = LeadCategory.NO_WEBSITE
+                    lead.website_status = WebsiteStatus.ERROR
+                    lead.lead_score += 10
+                    lead.lead_score_breakdown["broken_website"] = 10
+                    logger.warning(f"[{lead.name}] HTTP {response.status}")
                 await browser.close()
                 return lead
 
-            # ── GET PAGE CONTENT ──
-            page_html = await page.content()
+            # ── PHASE 3: CONTENT ANALYSIS ──
+
+            # Grab page source — wrap in try so a navigation here doesn't kill us
+            page_html = ""
             page_text = ""
             try:
+                page_html = await page.content()
                 page_text = await page.inner_text("body")
-            except Exception:
-                pass
+            except Exception as e:
+                if _is_navigation_error(str(e)):
+                    logger.warning(f"[{lead.name}] Navigation during content read — recovering")
+                    classified = await _try_recover_after_navigation(page, lead)
+                    await browser.close()
+                    return lead
+                # Partial content is still useful — continue
 
             page_html_lower = page_html.lower()
             page_text_lower = page_text.lower()
 
-            # ── EDGE CASE: PARKED DOMAIN ──
+            # Parked / under construction / Cloudflare — fast-exit checks
             if _is_parked_domain(page_text_lower, page_html_lower):
                 lead.category = LeadCategory.NO_WEBSITE
                 lead.website_status = WebsiteStatus.PARKED
                 lead.lead_score += 20
                 lead.lead_score_breakdown["parked_domain"] = 20
-                logger.info(
-                    f"[{lead.name}] PARKED domain detected. Category: NO_WEBSITE"
-                )
+                logger.info(f"[{lead.name}] PARKED domain")
                 await browser.close()
                 return lead
 
-            # ── EDGE CASE: UNDER CONSTRUCTION ──
             if _is_under_construction(page_text_lower, page_html_lower):
                 lead.category = LeadCategory.NO_WEBSITE
                 lead.website_status = WebsiteStatus.UNDER_CONSTRUCTION
-                lead.lead_score += 25  # Highest score — they're actively building!
+                lead.lead_score += 25
                 lead.lead_score_breakdown["under_construction"] = 25
-                logger.info(f"[{lead.name}] UNDER CONSTRUCTION. Category: NO_WEBSITE")
+                logger.info(f"[{lead.name}] UNDER CONSTRUCTION")
                 await browser.close()
                 return lead
 
-            # ── EDGE CASE: CLOUDFLARE CHALLENGE ──
             if _is_cloudflare_blocked(page_text_lower, page_html_lower):
                 lead.category = LeadCategory.STATIC_WEBSITE
                 lead.website_status = WebsiteStatus.CLOUDFLARE_BLOCKED
                 lead.lead_score += 5
                 lead.lead_score_breakdown["cloudflare_basic"] = 5
-                logger.info(
-                    f"[{lead.name}] Cloudflare challenge detected. Assuming STATIC."
-                )
+                logger.info(f"[{lead.name}] Cloudflare/bot challenge")
                 await browser.close()
                 return lead
 
-            # ── Site is LIVE ──
             lead.website_status = WebsiteStatus.LIVE
 
-            # ── DISMISS COOKIE CONSENT ──
-            await _dismiss_cookie_consent(page)
+            # ── STEP 0: Cookie consent dismissal ──
+            try:
+                await _dismiss_cookie_consent(page)
+            except Exception as e:
+                if _is_navigation_error(str(e)):
+                    classified = await _try_recover_after_navigation(page, lead)
+                    await browser.close()
+                    return lead
 
-            # ── STEP 1: BOOKING SYSTEM DETECTION ──
-            booking = await _detect_booking_system(page, page_html)
+            # ── STEP 1: Booking system detection ──
+            # Independent try/except — navigation here means the site itself
+            # redirected to a booking platform when a button was clicked.
+            try:
+                booking = await _detect_booking_system(page, page_html)
+            except Exception as e:
+                booking = None
+                if _is_navigation_error(str(e)):
+                    logger.info(f"[{lead.name}] Navigation during booking scan — checking new URL")
+                    classified = await _try_recover_after_navigation(page, lead)
+                    if classified:
+                        await browser.close()
+                        return lead
 
             if booking:
                 lead.category = LeadCategory.FULLY_AUTOMATED
                 lead.booking_system = booking
-                logger.info(f"[{lead.name}] Booking system: {booking}")
+                logger.info(f"[{lead.name}] Booking: {booking}")
             else:
-                booking_on_subpage = await _check_subpages_for_booking(page, url)
-                if booking_on_subpage:
+                try:
+                    booking_sub = await _check_subpages_for_booking(page, url)
+                except Exception as e:
+                    booking_sub = None
+                    if _is_navigation_error(str(e)):
+                        classified = await _try_recover_after_navigation(page, lead)
+                        if classified:
+                            await browser.close()
+                            return lead
+
+                if booking_sub:
                     lead.category = LeadCategory.FULLY_AUTOMATED
-                    lead.booking_system = booking_on_subpage
-                    logger.info(
-                        f"[{lead.name}] Booking on subpage: {booking_on_subpage}"
-                    )
+                    lead.booking_system = booking_sub
+                    logger.info(f"[{lead.name}] Booking (subpage): {booking_sub}")
                 else:
                     lead.category = LeadCategory.STATIC_WEBSITE
                     lead.lead_score += 15
                     lead.lead_score_breakdown["static_website"] = 15
-                    logger.info(f"[{lead.name}] STATIC_WEBSITE (no booking)")
+                    logger.info(f"[{lead.name}] STATIC_WEBSITE")
 
-            # ── STEP 2: WHATSAPP FROM WEBSITE ──
-            await _detect_whatsapp_from_page(page, page_html, lead)
+            # ── STEP 2: WhatsApp signal from page ──
+            try:
+                await _detect_whatsapp_from_page(page, page_html, lead)
+            except Exception as e:
+                if _is_navigation_error(str(e)):
+                    logger.debug(f"[{lead.name}] Navigation during WhatsApp scan — skipping")
+                # Non-navigation error: silently skip, don't kill the whole pipeline
 
-            # ── STEP 3: PHONE BACKUP ──
+            # ── STEP 3: Phone backup from page text ──
             if not lead.phone and not lead.phone_unformatted:
                 _extract_phone_from_text(page_text, lead)
 
-            # ── STEP 4: DEEP SOCIAL MEDIA EXTRACTION (5 methods) ──
-            await _deep_extract_social_media(page, page_html, lead)
+            # ── STEP 4: Deep social media extraction ──
+            try:
+                await _deep_extract_social_media(page, page_html, lead)
+            except Exception as e:
+                if _is_navigation_error(str(e)):
+                    logger.debug(f"[{lead.name}] Navigation during social scan — using partial data")
 
-            # ── STEP 5: WEBSITE QUALITY SCORING ──
+            # ── STEP 5: Website quality scoring (sync — cannot cause navigation) ──
             _score_website_quality(page_html_lower, lead)
 
-            # ── STEP 6: OSINT SOCIAL RESOLVER (FALLBACK) ──
+            # ── STEP 6: OSINT social resolver (network, not Playwright) ──
             if not lead.instagram_url or not lead.facebook_url:
-                await resolve_missing_socials(lead)
+                try:
+                    await resolve_missing_socials(lead)
+                except Exception as e:
+                    logger.warning(f"[{lead.name}] OSINT resolver error: {e}")
 
-            # ── CLAMP FINAL SCORE ──
             lead.lead_score = max(0, min(100, lead.lead_score))
-
             await browser.close()
             return lead
 
         except Exception as e:
             err_msg = str(e)
-            if "execution context was destroyed" in err_msg.lower():
+            if _is_navigation_error(err_msg):
                 logger.warning(
-                    f"[{lead.name}] Navigation occurred during analysis. Returning partial data."
+                    f"[{lead.name}] ⚡ Unexpected navigation escape — returning partial data"
                 )
             else:
                 logger.error(f"[{lead.name}] Browser analysis failed: {err_msg}")
@@ -515,169 +649,7 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
                     await browser.close()
                 except Exception:
                     pass
-            return lead
-
-
-# ─────────────────────────────────────────────
-# WHATSAPP PHONE NUMBER VERIFICATION
-# ─────────────────────────────────────────────
-
-
-async def verify_whatsapp_number(lead: LeadProfile) -> LeadProfile:
-    """
-    Proactively check if a salon's phone number is registered on WhatsApp.
-    Uses api.whatsapp.com/send?phone=<number> endpoint.
-
-    DETECTION LOGIC (verified via real browser inspection):
-    - Valid number: Page heading shows "Chat on WhatsApp with +1 XXX-XXX-XXXX"
-      (formatted with dashes) + "Open app" button + "Continue to WhatsApp Web"
-    - Invalid number: Page shows "Phone number shared via url is invalid"
-      OR the number appears unformatted (no dashes) in the heading
-
-    This is a SEPARATE step, called AFTER analyze_lead_website.
-    Rate-limited: call with asyncio.sleep(2) between salons.
-    """
-    # Skip if already detected via website
-    if lead.whatsapp_status == WhatsAppStatus.DETECTED:
-        return lead
-
-    # Need a phone number to check
-    phone = lead.phone_unformatted or lead.phone
-    if not phone:
-        lead.whatsapp_status = WhatsAppStatus.NOT_DETECTED
-        return lead
-
-    # Clean phone for wa.me format (digits only, starting with country code)
-    clean_phone = re.sub(r"[^\d]", "", phone)
-
-    # If it was originally formatted with a +, trust it completely
-    if phone.startswith("+"):
-        pass  # Use clean_phone as is
-    # Otherwise, try to apply the lead's country code prefix
-    elif lead.country_code:
-        # Simple mapping for common ones if not already prefixed
-        if lead.country_code == "US" and not clean_phone.startswith("1"):
-            clean_phone = "1" + clean_phone
-        elif lead.country_code == "IN" and not clean_phone.startswith("91"):
-            clean_phone = "91" + clean_phone
-        # Fallback: if lead.country_code is a digit string, use it
-        elif lead.country_code.isdigit():
-            if not clean_phone.startswith(lead.country_code):
-                clean_phone = lead.country_code + clean_phone
-
-    wa_url = f"https://api.whatsapp.com/send?phone={clean_phone}"
-
-    logger.info(
-        f"[{lead.name}] Checking Global WhatsApp: +{clean_phone} (Region: {lead.country_code or 'UNKNOWN'})"
-    )
-
-    return await _safe_playwright_call(_browser_verify_whatsapp, lead, clean_phone)
-
-
-async def _browser_verify_whatsapp(lead: LeadProfile, clean_phone: str) -> LeadProfile:
-    """Inner function that does the actual WhatsApp Playwright verification."""
-    wa_url = f"https://api.whatsapp.com/send?phone={clean_phone}"
-
-    async with async_playwright() as p:
-        browser = None
-        try:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                ignore_https_errors=True,
-            )
-            page = await context.new_page()
-
-            await page.goto(wa_url, wait_until="networkidle", timeout=15000)
-
-            # Wait for the page to fully render
-            await asyncio.sleep(3)
-
-            # ── LAYER 3: SIGNAL ANALYSIS ──
-            page_text = (await page.inner_text("body")).lower()
-
-            # The "Pro" signals from the user's manual verification
-            valid_signals = [
-                "open app",  # Green CTA button
-                "continue to whatsapp web",  # Secondary button
-                "download it now",  # Fallback link
-            ]
-
-            # ── THE "DASH FORMATTING" TRICK (High Confidence) ──
-            # WhatsApp formats valid numbers with dashes (+1 214-923-7138)
-            # but shows invalid numbers as raw digits.
-            is_valid = any(sig in page_text for sig in valid_signals)
-            has_valid_heading = False
-            is_raw_digit_fail = False
-
-            if "chat on whatsapp with" in page_text:
-                # Extract the part of the text that contains the phone number
-                try:
-                    # Look for the number after the heading text
-                    header_content = page_text.split("chat on whatsapp with")[1].strip()
-                    # Grab a chunk of the number (e.g. "+1 214-923-7138")
-                    number_part = header_content[:25]
-
-                    # Check if it contains a dash (strongest signal for validity)
-                    if "-" in number_part:
-                        has_valid_heading = True
-                        logger.debug(
-                            f"[{lead.name}] Dash formatting detected in WhatsApp heading: {number_part}"
-                        )
-                    else:
-                        # If it's just raw digits, it's likely an invalid number
-                        # (WhatsApp doesn't format it if the account doesn't exist)
-                        is_raw_digit_fail = True
-                        logger.debug(
-                            f"[{lead.name}] Raw digit number detected (likely invalid): {number_part}"
-                        )
-                except Exception:
-                    pass
-
-            # ── DECISION LOGIC ──
-            if is_raw_digit_fail:
-                lead.whatsapp_status = WhatsAppStatus.NOT_DETECTED
-                logger.info(
-                    f"[{lead.name}] ❌ WhatsApp NOT registered (Raw Digit Check): +{clean_phone}"
-                )
-            elif has_valid_heading and is_valid:
-                lead.whatsapp_status = WhatsAppStatus.DETECTED
-                lead.whatsapp_number = f"+{clean_phone}"
-                lead.lead_score += 20
-                lead.lead_score_breakdown["whatsapp_verified"] = 20
-                logger.info(
-                    f"[{lead.name}] ✅ WhatsApp VERIFIED (Dash Formatting): +{clean_phone}"
-                )
-            elif is_valid:
-                # Page shows valid buttons but heading didn't match perfectly (fallback)
-                lead.whatsapp_status = WhatsAppStatus.DETECTED
-                lead.whatsapp_number = f"+{clean_phone}"
-                lead.lead_score += 15
-                lead.lead_score_breakdown["whatsapp_likely"] = 15
-                logger.info(
-                    f"[{lead.name}] ✅ WhatsApp LIKELY (Button Match): +{clean_phone}"
-                )
-            else:
-                lead.whatsapp_status = WhatsAppStatus.UNVERIFIED
-                logger.info(f"[{lead.name}] ⚠️ WhatsApp inconclusive: +{clean_phone}")
-
-            await browser.close()
-            return lead
-
-        except Exception as e:
-            err_msg = str(e)
-            if "execution context was destroyed" in err_msg.lower():
-                logger.warning(
-                    f"[{lead.name}] WhatsApp check interrupted by navigation."
-                )
-            else:
-                logger.error(f"[{lead.name}] WhatsApp verification failed: {err_msg}")
-
-            if browser:
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
+            lead.lead_score = max(0, min(100, lead.lead_score))
             return lead
 
 
@@ -733,9 +705,9 @@ async def _detect_booking_system(page: Page, html: str) -> Optional[str]:
     return None
 
 
-async def _check_subpages_for_booking(page: Page, base_url: str) -> Optional[str]:
+async def _check_subpages_for_booking(page: Page, url: str) -> Optional[str]:
     """Check common subpages for booking systems."""
-    parsed = urlparse(base_url)
+    parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
 
     for subpage in BOOKING_SUBPAGES[:3]:
@@ -833,14 +805,28 @@ async def _deep_extract_social_media(page: Page, html: str, lead: LeadProfile):
     5. Icon-based links (Font Awesome, SVG icons)
     """
 
-    found_socials: Dict[str, str] = {}
+    socials: Dict[str, Any] = {}
 
     # ── METHOD 1: All <a href> links on page ──
     links = await page.query_selector_all("a[href]")
     for link in links:
         try:
             href = await link.get_attribute("href") or ""
-            _check_social_url(href, found_socials)
+            href_lower = href.lower()
+            if any(x in href_lower for x in ["facebook.com", "fb.com"]):
+                socials["facebook_url"] = href
+            elif any(x in href_lower for x in ["instagram.com", "instagr.am"]):
+                socials["instagram_url"] = href
+            elif "tiktok.com" in href_lower:
+                socials["tiktok_url"] = href
+            elif "yelp.com" in href_lower:
+                socials["yelp_url"] = href
+            elif any(x in href_lower for x in ["wa.me/", "api.whatsapp.com/send", "whatsapp:"]):
+                socials["whatsapp_found_on_web"] = True
+                # Try to extract the number from the wa.me link
+                wa_match = re.search(r'(?:wa\.me/|phone=)(\d+)', href)
+                if wa_match:
+                    socials["whatsapp_number"] = f"+{wa_match.group(1)}"
         except Exception:
             continue
 
@@ -857,14 +843,14 @@ async def _deep_extract_social_media(page: Page, html: str, lead: LeadProfile):
             try:
                 footer_html = await footer.inner_html()
                 for platform, config in SOCIAL_LINK_PATTERNS.items():
-                    if platform not in found_socials:
+                    if platform not in socials:
                         match = re.search(config["regex"], footer_html, re.IGNORECASE)
                         if match:
                             url = match.group(0)
                             if not any(exc in url.lower() for exc in config["exclude"]):
                                 if not url.startswith("http"):
                                     url = "https://" + url
-                                found_socials[platform] = url
+                                socials[f"{platform}_url"] = url
             except Exception:
                 continue
 
@@ -880,9 +866,9 @@ async def _deep_extract_social_media(page: Page, html: str, lead: LeadProfile):
                 # Handle both single object and array
                 if isinstance(data, list):
                     for item in data:
-                        _extract_from_jsonld(item, found_socials)
+                        _extract_from_jsonld(item, socials)
                 elif isinstance(data, dict):
-                    _extract_from_jsonld(data, found_socials)
+                    _extract_from_jsonld(data, socials)
             except (json.JSONDecodeError, Exception):
                 continue
     except Exception:
@@ -894,7 +880,7 @@ async def _deep_extract_social_media(page: Page, html: str, lead: LeadProfile):
         for meta in meta_tags:
             content = await meta.get_attribute("content") or ""
             if content:
-                _check_social_url(content, found_socials)
+                _check_social_url(content, socials)
     except Exception:
         pass
 
@@ -915,51 +901,42 @@ async def _deep_extract_social_media(page: Page, html: str, lead: LeadProfile):
             icon_link = await page.query_selector(selector)
             if icon_link:
                 href = await icon_link.get_attribute("href") or ""
-                _check_social_url(href, found_socials)
+                _check_social_url(href, socials)
         except Exception:
             continue
 
-    # ── APPLY found socials to salon ──
-    if "instagram" in found_socials and not lead.instagram_url:
-        lead.instagram_url = found_socials["instagram"]
-        lead.lead_score += 5
-        lead.lead_score_breakdown["instagram_found"] = 5
-        logger.info(f"[{lead.name}] Instagram: {found_socials['instagram']}")
-
-    if "facebook" in found_socials and not lead.facebook_url:
-        lead.facebook_url = found_socials["facebook"]
-        logger.info(f"[{lead.name}] Facebook: {found_socials['facebook']}")
-
-    if "tiktok" in found_socials and not lead.tiktok_url:
-        lead.tiktok_url = found_socials["tiktok"]
-        logger.info(f"[{lead.name}] TikTok: {found_socials['tiktok']}")
-
-    if "youtube" in found_socials and not lead.youtube_url:
-        lead.youtube_url = found_socials["youtube"]
-        logger.info(f"[{lead.name}] YouTube: {found_socials['youtube']}")
-
-    if "yelp" in found_socials and not lead.yelp_url:
-        lead.yelp_url = found_socials["yelp"]
-        logger.info(f"[{lead.name}] Yelp: {found_socials['yelp']}")
+    # Update lead with social findings
+    lead.instagram_url = socials.get("instagram_url") or lead.instagram_url
+    lead.facebook_url = socials.get("facebook_url") or lead.facebook_url
+    lead.tiktok_url = socials.get("tiktok_url") or lead.tiktok_url
+    lead.yelp_url = socials.get("yelp_url") or lead.yelp_url
+    
+    if socials.get("whatsapp_found_on_web"):
+        lead.whatsapp_found_on_web = True
+        lead.whatsapp_status = WhatsAppStatus.DETECTED
+        lead.whatsapp_confidence = "HIGH"
+        if socials.get("whatsapp_number"):
+            lead.whatsapp_number = socials.get("whatsapp_number")
 
 
-def _check_social_url(url: str, found: Dict[str, str]):
+def _check_social_url(url: str, found: Dict[str, Any]):
     """Check if a URL matches any social media platform and add to found dict."""
     if not url or not isinstance(url, str):
         return
     url_lower = url.lower()
     for platform, config in SOCIAL_LINK_PATTERNS.items():
-        if platform in found:
+        key = f"{platform}_url"
+        if key in found:
             continue  # Already found this one
         if any(domain in url_lower for domain in config["domains"]):
             if not any(exc in url_lower for exc in config["exclude"]):
                 if not url.startswith("http"):
                     url = "https://" + url
-                found[platform] = url
+                found[key] = url
                 return
 
 
-def _extract_from_jsonld(data: dict, found: Dict[str, str]):
+def _extract_from_jsonld(data: dict, found: Dict[str, Any]):
     """Extract social links from a JSON-LD object (Schema.org)."""
     # sameAs field is the standard way to list social profiles
     same_as = data.get("sameAs") or []
