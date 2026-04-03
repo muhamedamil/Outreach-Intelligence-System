@@ -12,13 +12,13 @@ class SingleInput(BaseModel):
 
 # ROW RESULT
 class RowResult(BaseModel):
-    row_id: int
-    input: Dict[str, Any]
-    business_profile: Optional[Dict[str, Any]]
-    contact: Optional[Dict[str, Any]]
-    outreach: Optional[Dict[str, Any]]
+    row_id: int = 0
+    input: Dict[str, Any] = {}
+    business_profile: Optional[Dict[str, Any]] = None # Handled via LeadProfile
+    contact: Optional[Dict[str, Any]] = None
+    outreach: Optional[Dict[str, Any]] = None
     status: str
-    latency_ms: Optional[float]
+    latency_ms: Optional[float] = 0.0
     error: Optional[str] = None
 
 

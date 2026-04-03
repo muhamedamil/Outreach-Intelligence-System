@@ -24,13 +24,25 @@ class Settings(BaseSettings):
     AGENT_TIMEOUT: int = 300
 
     # -------------------------
+    # APIFY & DISCOVERY
+    # -------------------------
+    APIFY_TOKEN: str = Field(..., env="APIFY_TOKEN")
+    APIFY_MAX_RESULTS: int = 100
+
+    # YOUR "SWEET SPOT" FILTERS
+    REVIEW_MIN: int = 10
+    REVIEW_MAX: int = 1000
+
+    # -------------------------
     # SCRAPER CONFIG
     # -------------------------
     SCRAPER_TIMEOUT: int = 20
     SCRAPER_RETRIES: int = 2
     SCRAPER_CONCURRENCY: int = 7
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", case_sensitive=True, extra="ignore"
+    )
 
 
 settings = Settings()

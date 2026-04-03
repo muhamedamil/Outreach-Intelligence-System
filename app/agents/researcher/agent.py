@@ -1,278 +1,99 @@
 # app/agents/researcher/agent.py
+#
+# Layer 3: The Brain (Emotional Intelligence)
+#
+# Instead of generic search, this agent analyzes deep lead data (like reviews)
+# to find "Emotional Hooks" and "Pain Points" for highly personalized outreach.
 
-from typing import List
-
-from app.agents.researcher.tools import search_tavily
-from app.agents.researcher.prompt import build_prompt
-from app.agents.researcher.parser import safe_parse_json
-
-from app.services.scraper.service import scrape_multiple
-from app.services.scraper.parser import extract_links
-from app.agents.contact_finder.sources import build_directory_urls
-from app.services.llm.client import llm_generate
-from app.models.business import SizeSignals, DigitalPresence, ToolsDetected, BusinessProfile, Source
 import logging
+import json
+import re
+from typing import List, Dict, Any, Optional
+from app.models.lead import LeadProfile
+from app.services.llm.client import llm_generate
 
 logger = logging.getLogger(__name__)
 
-# SOURCE RELIABILITY
-def get_source_reliability(url: str) -> float:
-    if "linkedin.com" in url:
-        return 0.6
-    elif "justdial" in url or "indiamart" in url:
-        return 0.7
-    return 0.9  # assume official / high-trust
-
-
-# CONTEXT BUILDER
-def build_context(scraped: List[dict], max_sources: int = 5) -> str:
-    chunks = []
-
-    for s in scraped[:max_sources]:
-        content = s.get("content", "")
-        if content:
-            chunks.append(content[:5000])
-
-    return "\n\n".join(chunks)
-
-
-# NORMALIZATION (CRITICAL)
-def normalize_output(data: dict) -> dict:
-    def to_str(val):
-        if val is None:
-            return None
-        if isinstance(val, (str, int, float)):
-            return str(val)
-        return str(val)
-
-    def is_valid_url(url: str) -> bool:
-        if not url or not isinstance(url, str):
-            return False
-        # Basic check for http/https to satisfy Pydantic HttpUrl
-        return url.lower().startswith(("http://", "https://"))
-
-    # Website validation
-    website = data.get("website")
-    if not is_valid_url(website):
-        website = None
-
-    # Social links validation & filtering
-    raw_social = data.get("social_links", [])
-    if not isinstance(raw_social, list):
-        raw_social = [raw_social] if raw_social else []
-    
-    social_links = [
-        str(link) for link in raw_social 
-        if is_valid_url(link)
-    ]
-
-    return {
-        "industry": to_str(data.get("industry")),
-        "description": to_str(data.get("description")),
-        "employee_estimate": to_str(data.get("employee_estimate")),
-        "branches": to_str(data.get("branches")),
-        "website": website,
-        "social_links": social_links,
-        "booking_system": to_str(data.get("booking_system")),
-        "crm": to_str(data.get("crm")),
-        "communication": to_str(data.get("communication")),
+# --- INDUSTRY SPECIFIC PROMPT LOGIC ---
+INDUSTRY_PROMPTS = {
+    "salon": {
+        "role": "You are a Senior Sales Researcher specializing in the Beauty Industry.",
+        "pain": "1. PAIN POINTS: Anything customers complain about regarding booking, phone response, or waiting times.",
+        "spark": "2. SPARKS: Anything customers LOVE (specialty services, specific staff names, atmosphere)."
+    },
+    "solar": {
+        "role": "You are a Senior Sales Researcher specializing in the Solar and Renewable Energy Industry.",
+        "pain": "1. PAIN POINTS: Anything customers complain about regarding high quotes, unresponsiveness, pushy sales tactics, or installation delays.",
+        "spark": "2. SPARKS: Anything customers LOVE (professionalism, transparency, quick roof installation, saving money)."
     }
+}
 
+async def run_lead_researcher(lead: LeadProfile) -> LeadProfile:
+    """
+    Analyzes the lead's reviews and ratings to find specific insights.
+    Returns the LeadProfile with an enriched 'lead_score_breakdown' 
+    and a new 'insights' dictionary.
+    """
+    logger.info(f"[{lead.name}] Analyzing reviews for emotional hooks...")
 
-# CONFIDENCE SCORING
-def compute_confidence(data: dict, sources: int) -> float:
-    score = 0.0
+    # 1. Prepare the context (Reviews are the gold mine)
+    review_texts = []
+    for r in lead.reviews[:15]: # Look at top 15 reviews
+        if r.text:
+            stars = "⭐" * (r.stars or 5)
+            review_texts.append(f"[{stars}] {r.text}")
 
-    if data.get("description"):
-        score += 0.2
-    if data.get("industry"):
-        score += 0.2
-    if data.get("website"):
-        score += 0.2
-    if data.get("employee_estimate"):
-        score += 0.2
-    if sources >= 3:
-        score += 0.2
+    if not review_texts:
+        logger.info(f"[{lead.name}] No reviews found to analyze.")
+        return lead
 
-    return round(min(score, 1.0), 2)
-
-
-# -------------------------
-# MAIN AGENT
-# -------------------------
-async def run_researcher(input_data: dict) -> BusinessProfile:
-    logger.info(f"--- RESEARCHER START ---")
-    logger.info(f"Input: {input_data}")
-
-    company = input_data.get("company_name")
-    location = input_data.get("location")
-
-    # VALIDATION
-    if not company:
-        return BusinessProfile(
-            company_name="unknown",
-            location=location or "",
-            confidence_score=0.0,
-            sources=[],
-        )
-
-    query = f"{company} {location} business details"
-    scraped = []
-
-    # SEARCH
-    logger.info(f"Searching Tavily for: '{query}'")
-    search_results = await search_tavily(query, include_raw=False)
+    context = "\n---\n".join(review_texts)
     
-    # Extract URLs
-    urls = [r["url"] for r in search_results]
+    # 2. Extract industry logic
+    ind_cfg = INDUSTRY_PROMPTS.get(lead.industry, INDUSTRY_PROMPTS["salon"])
     
-    # FALLBACK to manual search if Tavily failed
-    if not urls:
-        logger.warning("Tavily search yielded no URLs. Falling back to directory search...")
-        search_pages = build_directory_urls(company, location)
-        
-        # Scrape search pages to find actual organic links
-        logger.info(f"Scraping search engine pages for organic links...")
-        search_scraped = await scrape_multiple(search_pages)
-        
-        # Add search pages themselves to the usable content pool
-        scraped.extend(search_scraped)
-        
-        # Extract organic links to follow
-        urls = []
-        for s in search_scraped:
-             if s.get("success"):
-                  found_links = extract_links(s.get("html", ""))
-                  logger.info(f"Found {len(found_links)} organic links on {s.get('url')}")
-                  urls.extend(found_links[:3]) 
-        
-        # Deduplicate organic links
-        urls = list(dict.fromkeys(urls))
-        
-        # REMOVE search pages from urls list so we don't re-scrape them line 163
-        # We already have their content in 'scraped'
-        urls = [u for u in urls if u not in search_pages]
+    # 3. Call LLM to extract "Pain Points" and "Sparks"
+    system_prompt = f"""
+    {ind_cfg['role']}
+    Analyze the following Google Reviews for '{lead.name}'.
     
-    logger.info(f"Organic links to follow: {len(urls)} -> {urls}")
-
-    # SCRAPE ORGANIC LINKS (IF ANY)
-    if urls:
-        logger.info(f"Following {len(urls)} lead links...")
-        followed_scraped = await scrape_multiple(urls)
-        scraped.extend(followed_scraped)
-
-    if not scraped:
-        return BusinessProfile(
-            company_name=company, location=location, confidence_score=0.0, sources=[]
-        )
-
-    # MERGE TAVILY CONTENT IF SCRAPE FAILED
-    # If a URL failed to scrape but Tavily has content, use Tavily's version
-    logger.info(f"Checking merge for {len(search_results)} Tavily results...")
-    for result in search_results:
-        url = result["url"]
-        content = result.get("content", "")
+    Your goal is to find:
+    {ind_cfg['pain']}
+    {ind_cfg['spark']}
+    3. THE ANGLE: Should we pitch a "New Website" or "Automation Toolkit"?
+    
+    Return ONLY JSON:
+    {{
+        "pain_points": ["point 1", "point 2"],
+        "sparks": ["spark 1", "spark 2"],
+        "recommended_angle": "automation" | "website",
+        "personalization_hook": "A 1-sentence draft hook mentioning a specific review detail."
+    }}
+    """
+    
+    try:
+        llm_output = await llm_generate(context, system_prompt=system_prompt)
         
-        # Check if we already have a successful scrape for this URL
-        is_already_scraped = any(s["url"] == url and s.get("success") for s in scraped)
+        # Parse JSON from response
+        match = re.search(r'\{.*\}', llm_output, re.DOTALL)
+        if not match:
+            return lead
+            
+        insights = json.loads(match.group())
         
-        if not is_already_scraped and content:
-            logger.info(f"Fallback: Adding Tavily content for {url} ({len(content)} chars)")
-            scraped.append({
-                "url": url,
-                "content": content,
-                "success": True,
-                "source": "tavily"
-            })
-        elif is_already_scraped:
-             logger.debug(f"URL already successfuly scraped: {url}")
-        else:
-             logger.debug(f"No usable content from Tavily for: {url}")
-
-    scraped = sorted(scraped, key=lambda x: len(x.get("content", "")), reverse=True)
-    logger.info(f"Total usable contents: {len(scraped)}")
-
-    if not scraped:
-        return BusinessProfile(
-            company_name=company, location=location, confidence_score=0.1, sources=[]
-        )
-
-    # CONTEXT BUILD
-    context = build_context(scraped)
-
-    if not context.strip():
-        return BusinessProfile(
-            company_name=company,
-            location=location,
-            confidence_score=0.2,
-            sources=[
-                Source(
-                    type="web",
-                    url=s["url"],
-                    reliability=get_source_reliability(s["url"]),
-                )
-                for s in scraped
-            ],
-        )
-
-    # LLM SYNTHESIS
-    logger.info(f"Building summary for LLM context (length: {len(context)})")
-    prompt = build_prompt(context, company, location)
-
-    logger.info("Calling LLM to extract business details...")
-    llm_output = await llm_generate(prompt)
-    logger.debug(f"LLM Output: {llm_output}")
-
-    if not llm_output:
-        return BusinessProfile(
-            company_name=company,
-            location=location,
-            confidence_score=0.2,
-            sources=[
-                Source(
-                    type="web",
-                    url=s["url"],
-                    reliability=get_source_reliability(s["url"]),
-                )
-                for s in scraped
-            ],
-        )
-
-    parsed = safe_parse_json(llm_output)
-    normalized = normalize_output(parsed)
-
-    # SOURCE OBJECTS
-    sources = [
-        Source(type="web", url=s["url"], reliability=get_source_reliability(s["url"]))
-        for s in scraped
-    ]
-
-    # CONFIDENCE
-    confidence = compute_confidence(normalized, len(scraped))
-    logger.info(f"Researcher confidence formulated: {confidence}")
-    logger.info(f"--- RESEARCHER END ---")
-
-    # -------------------------
-    # FINAL OBJECT
-    # -------------------------
-    return BusinessProfile(
-        company_name=company,
-        location=location,
-        industry=normalized.get("industry"),
-        description=normalized.get("description"),
-        size_signals=SizeSignals(
-            employee_estimate=normalized.get("employee_estimate"),
-            branches=normalized.get("branches"),
-        ),
-        digital_presence=DigitalPresence(
-            website=normalized.get("website"),
-            social_links=normalized.get("social_links", []),
-        ),
-        tools_detected=ToolsDetected(
-            booking_system=normalized.get("booking_system"),
-            crm=normalized.get("crm"),
-            communication=normalized.get("communication"),
-        ),
-        sources=sources,
-        confidence_score=confidence,
-    )
+        # 3. Store insights in the profile
+        lead.lead_score_breakdown["ai_research_insights"] = insights
+        
+        # Adjust lead score based on identified pain points
+        if insights.get("pain_points"):
+             # Wait times or complaints mean they desperately need our systems
+            bonus = min(20, len(insights["pain_points"]) * 5)
+            lead.lead_score += bonus
+            lead.lead_score_breakdown["friction_detected"] = bonus
+            
+        logger.info(f"[{lead.name}] AI Research complete. Angle: {insights.get('recommended_angle')}")
+        
+    except Exception as e:
+        logger.error(f"[{lead.name}] AI Research failed: {str(e)}")
+        
+    return lead

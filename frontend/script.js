@@ -1,111 +1,254 @@
-async function uploadFile() {
-    const fileInput = document.getElementById("fileInput");
-    const statusText = document.getElementById("statusText");
-    const statusIndicator = document.getElementById("statusIndicator");
-    const resultsBody = document.getElementById("resultsBody");
-    const loader = document.getElementById("loader");
-    const emptyState = document.getElementById("emptyState");
+// frontend/script.js
+
+let currentMode = 'mining';
+let selectedFile = null;
+
+function switchMode(mode) {
+    currentMode = mode;
     
-    const file = fileInput.files[0];
-    if (!file) {
-        alert("Please select a file");
-        return;
+    // Update tabs
+    document.querySelectorAll('.cmd-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+
+    // Update visibility
+    if (mode === 'mining') {
+        document.getElementById('miningInput').classList.remove('hidden');
+        document.getElementById('enrichingInput').classList.add('hidden');
+    } else {
+        document.getElementById('miningInput').classList.add('hidden');
+        document.getElementById('enrichingInput').classList.remove('hidden');
+    }
+}
+
+function handleFileSelect(input) {
+    const file = input.files[0];
+    if (file) {
+        selectedFile = file;
+        document.getElementById('fileNameDisplay').innerText = `Selected: ${file.name}`;
+        document.getElementById('dropZone').style.borderColor = 'var(--accent-primary)';
+    }
+}
+
+// Drag & Drop functionality
+const dropZone = document.getElementById('dropZone');
+if (dropZone) {
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+            document.getElementById('fileInput').files = e.dataTransfer.files;
+            handleFileSelect(document.getElementById('fileInput'));
+        }
+    });
+}
+
+async function runCampaign() {
+    const promptText = document.getElementById('promptText').value.trim();
+    
+    let formData = new FormData();
+    
+    if (currentMode === 'mining') {
+        if (!promptText) {
+            alert("Please enter a discovery prompt.");
+            return;
+        }
+        formData.append("prompt", promptText);
+        formData.append("limit", document.getElementById('limitMiner').value || 10);
+    } else {
+        if (!selectedFile) {
+            alert("Please upload a file to enrich.");
+            return;
+        }
+        formData.append("file", selectedFile);
+        formData.append("limit", document.getElementById('limitEnricher').value || 10);
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-
-    // Initial UI State
-    statusText.innerText = "Analyzing Leads...";
-    statusIndicator.classList.add("loading");
-    resultsBody.innerHTML = "";
-    emptyState.classList.add("hidden");
-    loader.classList.remove("hidden");
+    // UI Updates - loading
+    document.getElementById('emptyState').classList.add('hidden');
+    document.getElementById('resultsGrid').classList.add('hidden');
+    document.getElementById('loader').classList.remove('hidden');
+    document.getElementById('statusIndicator').classList.add('loading');
+    document.getElementById('statusText').innerText = "Analyzing Leads (Layers 1-4)...";
+    
+    const startTime = Date.now();
+    let durationInterval = setInterval(() => {
+        const secs = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('statLatency').innerText = `${secs}s`;
+    }, 1000);
 
     try {
-        const response = await fetch("/api/upload", {
-            method: "POST",
+        const response = await fetch('/api/campaign', {
+            method: 'POST',
             body: formData
         });
 
-        if (!response.ok) throw new Error("Processing failed");
+        clearInterval(durationInterval);
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || "Processing failed");
+        }
 
         const data = await response.json();
         
         // Update Stats
-        document.getElementById("statTotal").innerText = data.summary.total_rows;
-        document.getElementById("statSuccess").innerText = data.summary.success;
-        document.getElementById("statLatency").innerText = Math.round(data.summary.processing_time_sec) + "s";
+        document.getElementById('statTotal').innerText = data.summary.total_rows;
+        
+        let waCount = 0;
+        data.results.forEach(r => {
+            if (r.business_profile?.whatsapp_status === "DETECTED") waCount++;
+        });
+        document.getElementById('statSuccess').innerText = waCount;
+        
+        document.getElementById('statLatency').innerText = `${Math.round(data.summary.processing_time_sec)}s`;
 
-        renderResults(data.results);
+        renderGrid(data.results);
 
-        statusText.innerText = "System Ready";
-        statusIndicator.classList.remove("loading");
-        loader.classList.add("hidden");
+        document.getElementById('statusText').innerText = "System Ready";
+        document.getElementById('statusIndicator').classList.remove('loading');
+        document.getElementById('loader').classList.add('hidden');
+        document.getElementById('resultsGrid').classList.remove('hidden');
 
-    } catch (error) {
-        statusText.innerText = "Processing Error";
-        statusIndicator.classList.remove("loading");
-        loader.classList.add("hidden");
-        emptyState.classList.remove("hidden");
-        alert(error.message);
+    } catch (err) {
+        clearInterval(durationInterval);
+        alert(`Error: ${err.message}`);
+        document.getElementById('statusText').innerText = "System Error";
+        document.getElementById('statusIndicator').classList.remove('loading');
+        document.getElementById('loader').classList.add('hidden');
+        document.getElementById('emptyState').classList.remove('hidden');
     }
 }
 
-function renderResults(results) {
-    const body = document.getElementById("resultsBody");
-    body.innerHTML = "";
+// Store results globally to open modal
+let globalResults = [];
 
-    results.forEach(row => {
-        const tr = document.createElement("tr");
-        
-        // Handle potential null/undefined from BusinessProfile
+function renderGrid(results) {
+    globalResults = results;
+    const grid = document.getElementById('resultsGrid');
+    grid.innerHTML = '';
+
+    results.forEach((row, index) => {
         const profile = row.business_profile || {};
-        const contact = row.contact || {};
-        const outreach = row.outreach || {};
+        
+        // Category styling
+        let catTag = "tag-dead";
+        let emoji = "🔴";
+        if (profile.category === "STATIC_WEBSITE") { catTag = "tag-static"; emoji = "🟡"; }
+        if (profile.category === "FULLY_AUTOMATED") { catTag = "tag-auto"; emoji = "🔵"; }
 
-        tr.innerHTML = `
-            <td>
-                <div class="company-cell">
-                    <span class="company-name">${profile.company_name || row.input.company_name}</span>
-                    <span class="industry-tag">${profile.industry || 'Unknown Industry'}</span>
+        // WhatsApp styling
+        const isWa = profile.whatsapp_status === "DETECTED";
+        
+        const cardHtml = `
+            <div class="lead-card glass-panel" onclick="openModal(${index})">
+                <div class="card-header">
+                    <div class="company-info">
+                        <h3>${emoji} ${profile.name || "Unknown"}</h3>
+                        <div class="address-info">${profile.address || "No address"}</div>
+                    </div>
+                    <div class="score-badge">${profile.lead_score || 0}/100</div>
                 </div>
-            </td>
-            <td>
-                <div class="intel-cell">
-                    <p class="intel-desc">${profile.description || 'No description extracted.'}</p>
-                    <div class="intel-badges">
-                        ${profile.size_signals?.employee_estimate ? `<span class="badge">👥 ${profile.size_signals.employee_estimate}</span>` : ''}
-                        ${profile.size_signals?.branches ? `<span class="badge">📍 ${profile.size_signals.branches} Branches</span>` : ''}
-                        ${profile.digital_presence?.website ? `<span class="badge">🌐 Has Website</span>` : '<span class="badge opacity-50">⚪ No Website</span>'}
+                
+                <div>
+                    <span class="category-tag ${catTag}">${profile.category ? profile.category.replace('_', ' ') : 'NO WEBSITE'}</span>
+                </div>
+                
+                <div class="card-body">
+                    <div class="data-row">
+                        <span class="data-label">Phone</span>
+                        <span class="data-value">${profile.phone || 'N/A'}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">WhatsApp</span>
+                        <span class="data-value ${isWa ? 'wa-detected' : 'wa-none'}">${isWa ? 'VERIFIED ✓' : 'unverified'}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">Google Rating</span>
+                        <span class="data-value">${profile.google_rating || '0'}⭐ (${profile.google_review_count || 0})</span>
                     </div>
                 </div>
-            </td>
-            <td>
-                <div class="contact-cell">
-                    ${contact.phone ? `<div class="contact-item"><span>📞</span> ${contact.phone}</div>` : ''}
-                    ${contact.email ? `<div class="contact-item"><span>✉️</span> ${contact.email}</div>` : ''}
-                    ${contact.whatsapp ? `<div class="contact-item"><a href="https://wa.me/${contact.whatsapp.replace(/\D/g, '')}" target="_blank" style="text-decoration:none"><span>💬</span> WhatsApp</a></div>` : ''}
-                    ${!contact.phone && !contact.email && !contact.whatsapp ? '<div class="contact-item opacity-50">Not Found</div>' : ''}
-                    ${contact.sources?.length > 0 ? `<a href="${contact.sources[0].url}" target="_blank" class="source-link">View Source ↗</a>` : ''}
-                </div>
-            </td>
-            <td>
-                <div class="outreach-cell">
-                    <div class="message-box">
-                        ${outreach.message || 'Waiting for context...'}
-                        <button class="copy-btn" onclick="copyText(this, '${(outreach.message || "").replace(/'/g, "\\'")}')">Copy</button>
-                    </div>
-                </div>
-            </td>
+            </div>
         `;
-        body.appendChild(tr);
+        grid.insertAdjacentHTML('beforeend', cardHtml);
     });
 }
 
-function copyText(btn, text) {
-    navigator.clipboard.writeText(text);
-    const originalText = btn.innerText;
-    btn.innerText = "Copied!";
-    setTimeout(() => btn.innerText = originalText, 2000);
+function openModal(index) {
+    const row = globalResults[index];
+    const profile = row.business_profile || {};
+    const outreach = row.outreach || {};
+    
+    let linksHtml = '';
+    if (profile.website_url) linksHtml += `<a href="${profile.website_url}" target="_blank">🌐 Website</a>`;
+    if (profile.instagram_url) linksHtml += `<a href="${profile.instagram_url}" target="_blank">📸 Instagram</a>`;
+    if (profile.facebook_url) linksHtml += `<a href="${profile.facebook_url}" target="_blank">📘 Facebook</a>`;
+    if (profile.whatsapp_number) linksHtml += `<a href="https://wa.me/${profile.whatsapp_number.replace(/\D/g,'')}" target="_blank">💬 WhatsApp</a>`;
+
+    let reviewsHtml = '';
+    if (profile.reviews && profile.reviews.length > 0) {
+        profile.reviews.slice(0,3).forEach(r => {
+            if (!r) return;
+            reviewsHtml += `<div class="review-item">${r.stars || 5}⭐ "${r.text || ''}"</div>`;
+        });
+    } else {
+        reviewsHtml = '<p style="color:var(--text-muted);font-size:0.85rem">No detailed reviews available.</p>';
+    }
+
+    const modalBodyHtml = `
+        <div class="modal-header">
+            <h2 class="modal-title">${profile.name || "Unknown"}</h2>
+            <div class="modal-links">
+                ${linksHtml}
+            </div>
+        </div>
+        
+        <div class="modal-grid">
+            <div class="left-col">
+                <div class="info-section">
+                    <h4>Lead Intelligence Payload</h4>
+                    <div class="score-breakdown-code">${JSON.stringify(profile.lead_score_breakdown || {}, null, 2)}</div>
+                </div>
+                
+                <div class="info-section" style="margin-top:24px">
+                    <h4>Recent Top Reviews</h4>
+                    <div class="review-list">
+                        ${reviewsHtml}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="right-col">
+                <div class="info-section">
+                    <h4>Generated AI Outreach</h4>
+                    <div class="outreach-box">
+                        ${(outreach.message || "No outreach generated. Check AI context.").replace(/\n/g, '<br>')}
+                    </div>
+                </div>
+                
+                <div class="info-section" style="margin-top:24px">
+                    <h4>Internal Metadata</h4>
+                    <div style="font-size:0.85rem;color:var(--text-muted);display:flex;flex-direction:column;gap:4px">
+                        <span><strong>Phone Raw:</strong> ${profile.phone_unformatted || 'N/A'}</span>
+                        <span><strong>Booking Tech:</strong> ${profile.booking_system || 'None Detected'}</span>
+                        <span><strong>Web Status:</strong> ${profile.website_status || 'UNKNOWN'}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('modalBody').innerHTML = modalBodyHtml;
+    document.getElementById('detailsModal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('detailsModal').classList.add('hidden');
 }

@@ -26,6 +26,7 @@ class GroqClient:
 # -------------------------
 async def llm_generate(
     prompt: str,
+    system_prompt: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None
 ) -> Optional[str]:
@@ -41,14 +42,17 @@ async def llm_generate(
     temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
     max_tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
 
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
     for attempt in range(settings.LLM_MAX_RETRIES + 1):
         try:
             response = await asyncio.wait_for(
                 client.chat.completions.create(
                     model=settings.LLM_MODEL,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
+                    messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 ),
