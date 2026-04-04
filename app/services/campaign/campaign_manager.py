@@ -96,6 +96,9 @@ async def run_full_campaign(
             outreach = await generate_lead_outreach(lead)
 
             # Package the final intelligence object
+            logger.info(f"[{lead.name}] DEBUG - Breakdown: {lead.lead_score_breakdown}")
+            logger.info(f"[{lead.name}] DEBUG - Insights: {lead.ai_research_insights}")
+            
             results.append({
                 "lead": lead.model_dump(),
                 "campaign_outreach": outreach

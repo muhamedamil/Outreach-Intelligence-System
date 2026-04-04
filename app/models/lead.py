@@ -236,6 +236,7 @@ class LeadProfile(BaseModel):
     negative_review_signals: List[str] = []
     lead_score: int = 0
     lead_score_breakdown: Dict[str, int] = {}
+    ai_research_insights: Optional[Dict[str, Any]] = None
 
     # ── METADATA ──
     scraped_at: Optional[str] = None
@@ -262,6 +263,12 @@ class LeadProfile(BaseModel):
     def _ensure_breakdown(cls, v: Any) -> Dict[str, int]:
         return _clean_int_dict(v)
 
+    @field_validator("ai_research_insights", mode="before")
+    @classmethod
+    def _ensure_insights(cls, v: Any) -> Optional[Dict[str, Any]]:
+        if v is None: return {}
+        return v if isinstance(v, dict) else {}
+
     # ── Layer 3: Serialization-phase cast — catches dict-item assignments ──
     # These fire even when the value was set via lead.lead_score_breakdown["x"] = v
     # (which bypasses validate_assignment in Pydantic 2.7.x)
@@ -276,3 +283,8 @@ class LeadProfile(BaseModel):
     @field_serializer("lead_score_breakdown", when_used="always")
     def _serialize_breakdown(self, v: Any) -> Dict[str, int]:
         return _clean_int_dict(v)
+
+    @field_serializer("ai_research_insights", when_used="always")
+    def _serialize_insights(self, v: Any) -> Optional[Dict[str, Any]]:
+        if v is None: return {}
+        return v if isinstance(v, dict) else {}

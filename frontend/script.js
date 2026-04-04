@@ -214,7 +214,10 @@ function openModal(index) {
             <div class="left-col">
                 <div class="info-section">
                     <h4>Lead Intelligence Payload</h4>
-                    <div class="score-breakdown-code">${JSON.stringify(profile.lead_score_breakdown || {}, null, 2)}</div>
+                    <div class="score-breakdown-code">${JSON.stringify({
+                        score_breakdown: profile.lead_score_breakdown || {},
+                        ai_research_insights: profile.ai_research_insights || {}
+                    }, null, 2)}</div>
                 </div>
                 
                 <div class="info-section" style="margin-top:24px">

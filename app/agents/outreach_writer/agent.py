@@ -34,7 +34,7 @@ async def generate_lead_outreach(lead: LeadProfile) -> Dict[str, str]:
     logger.info(f"[{lead.name}] Generating multi-channel outreach...")
 
     # 1. Extract the "Hook" and "Insights" from Layer 3
-    insights = lead.lead_score_breakdown.get("ai_research_insights", {})
+    insights = lead.ai_research_insights or {}
     pain_points = insights.get("pain_points", [])
     sparks = insights.get("sparks", [])
     hook = insights.get("personalization_hook", "")

@@ -385,16 +385,16 @@ async def analyze_lead_website(lead: LeadProfile) -> LeadProfile:
         logger.info(f"[{lead.name}] Website IS {platform}. Category: FULLY_AUTOMATED")
         return lead
 
-    # ── FULL BROWSER ANALYSIS — hard 60s total budget ──
+    # ── FULL BROWSER ANALYSIS — hard 75s total budget ──
     logger.info(f"[{lead.name}] Starting browser analysis: {url}")
     try:
         return await asyncio.wait_for(
             _safe_playwright_call(_browser_analyze_lead, lead, url),
-            timeout=60,
+            timeout=75,
         )
     except asyncio.TimeoutError:
         logger.warning(
-            f"[{lead.name}] ⏱ Analysis budget exceeded (60s). Returning partial data."
+            f"[{lead.name}] ⏱ Analysis budget exceeded (75s). Returning partial data."
         )
         lead.website_status = WebsiteStatus.TIMEOUT
         if lead.category == LeadCategory.NO_WEBSITE:
@@ -426,10 +426,11 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
             # ── PHASE 1: INITIAL NAVIGATION ──
             response = None
             try:
-                response = await page.goto(url, wait_until="load", timeout=25000)
-                # Let the network settle (catches late JS redirects)
-                await page.wait_for_load_state("networkidle", timeout=8000)
-                await asyncio.sleep(1.5)
+                # Reduced initial timeout from 25s to 18s to prevent total budget consumption
+                response = await page.goto(url, wait_until="load", timeout=18000)
+                # Let the network settle (catches late JS redirects) - reduced timeout
+                await page.wait_for_load_state("networkidle", timeout=5000)
+                await asyncio.sleep(1.0)
             except Exception as nav_err:
                 error_msg = str(nav_err).lower()
 
@@ -583,7 +584,8 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
                 logger.info(f"[{lead.name}] Booking: {booking}")
             else:
                 try:
-                    booking_sub = await _check_subpages_for_booking(page, url)
+                    # Pass context instead of page so the homepage DOM remains intact
+                    booking_sub = await _check_subpages_for_booking(context, url)
                 except Exception as e:
                     booking_sub = None
                     if _is_navigation_error(str(e)):
@@ -705,28 +707,31 @@ async def _detect_booking_system(page: Page, html: str) -> Optional[str]:
     return None
 
 
-async def _check_subpages_for_booking(page: Page, url: str) -> Optional[str]:
-    """Check common subpages for booking systems."""
+async def _check_subpages_for_booking(context, url: str) -> Optional[str]:
+    """Check common subpages for booking systems without hijacking the main page."""
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
 
     for subpage in BOOKING_SUBPAGES[:3]:
+        sub_page = await context.new_page()
         try:
             sub_url = f"{base}{subpage}"
-            response = await page.goto(
-                sub_url, wait_until="domcontentloaded", timeout=10000
+            response = await sub_page.goto(
+                sub_url, wait_until="domcontentloaded", timeout=4500
             )
             if response and response.status < 400:
-                redirect_platform = _is_booking_platform_url(page.url)
+                redirect_platform = _is_booking_platform_url(sub_page.url)
                 if redirect_platform:
                     return redirect_platform
-                sub_html = await page.content()
+                sub_html = await sub_page.content()
                 html_lower = sub_html.lower()
                 for platform, data in BOOKING_PLATFORMS.items():
                     if any(sig in html_lower for sig in data["urls"]):
                         return platform
         except Exception:
             continue
+        finally:
+            await sub_page.close()
     return None
 
 
@@ -980,7 +985,9 @@ async def _dismiss_cookie_consent(page: Page):
         try:
             btn = await page.query_selector(selector)
             if btn and await btn.is_visible():
-                await btn.click()
+                # force=True and no_wait_after=True prevent Playwright from waiting
+                # for navigations that shouldn't happen, avoiding hangs.
+                await btn.click(timeout=1500, force=True, no_wait_after=True)
                 await asyncio.sleep(0.5)
                 logger.debug(f"Dismissed cookie consent via: {selector}")
                 return

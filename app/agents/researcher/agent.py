@@ -31,20 +31,22 @@ INDUSTRY_PROMPTS = {
 async def run_lead_researcher(lead: LeadProfile) -> LeadProfile:
     """
     Analyzes the lead's reviews and ratings to find specific insights.
-    Returns the LeadProfile with an enriched 'lead_score_breakdown' 
-    and a new 'insights' dictionary.
+    Returns the LeadProfile with an enriched 'ai_research_insights' field.
     """
     logger.info(f"[{lead.name}] Analyzing reviews for emotional hooks...")
 
-    # 1. Prepare the context (Reviews are the gold mine)
+    # 1. Initialize the field (Ensures it appears in JSON even if reviews are missing)
+    lead.ai_research_insights = {"status": "no_reviews_to_analyze"}
+
+    # 2. Look at top 15 reviews
     review_texts = []
-    for r in lead.reviews[:15]: # Look at top 15 reviews
+    for r in lead.reviews[:15]:
         if r.text:
             stars = "⭐" * (r.stars or 5)
             review_texts.append(f"[{stars}] {r.text}")
 
     if not review_texts:
-        logger.info(f"[{lead.name}] No reviews found to analyze.")
+        logger.info(f"[{lead.name}] No review text found to analyze.")
         return lead
 
     context = "\n---\n".join(review_texts)
@@ -82,7 +84,7 @@ async def run_lead_researcher(lead: LeadProfile) -> LeadProfile:
         insights = json.loads(match.group())
         
         # 3. Store insights in the profile
-        lead.lead_score_breakdown["ai_research_insights"] = insights
+        lead.ai_research_insights = insights
         
         # Adjust lead score based on identified pain points
         if insights.get("pain_points"):
