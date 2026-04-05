@@ -18,11 +18,11 @@ if __name__ == "__main__":
     # Step 1: Force ProactorEventLoop BEFORE anything else
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        print("✅ Windows ProactorEventLoop enforced.")
+        print("Windows ProactorEventLoop enforced.")
     
     import uvicorn
     
-    print("🚀 Starting Lead Intelligence Engine on http://127.0.0.1:8001")
+    print("Starting Lead Intelligence Engine on http://127.0.0.1:8001")
     print("   Press CTRL+C to stop.")
     print("")
     

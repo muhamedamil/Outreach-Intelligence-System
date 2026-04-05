@@ -92,10 +92,13 @@ async def search_leads(
 
     client = ApifyClient(settings.APIFY_TOKEN)
 
+    # For discovery, crawl more places to survive local filtering (min 50)
+    crawl_limit = max(50, max_results * 3) if max_results else settings.APIFY_MAX_RESULTS
+
     run_input = {
         "searchStringsArray": queries,
         "locationQuery": location,
-        "maxCrawledPlacesPerSearch": max_results,
+        "maxCrawledPlacesPerSearch": crawl_limit,
         "language": "en",
         "proxyConfiguration": {"useApifyProxy": True},
         "skipClosedPlaces": True,
@@ -192,6 +195,10 @@ async def search_leads(
             
             all_leads.append(lead)
             stats["accepted"] += 1
+            
+            if max_results and len(all_leads) >= max_results:
+                logger.info(f"   Reached requested max_results ({max_results}). ")
+                break
 
         # ── LOG STATS ──
         logger.info(f"✅ Discovery complete:")

@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Outreach Intelligence | Operations Command</title>
+    <title>Outreach Intelligence | Command Center</title>
+    <meta name="description" content="AI-powered multi-agent lead research and outreach pipeline. Enter a prompt or upload a file to begin.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Background Elements -->
     <div class="bg-glow blob-1"></div>
     <div class="bg-glow blob-2"></div>
-    
+
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar glass-panel">
@@ -22,7 +22,7 @@
                 <span>Outreach AI</span>
             </div>
             <nav class="nav">
-                <a href="#" class="nav-item active"><span class="icon">⊞</span> Dashboard</a>
+                <a href="#" class="nav-item active"><span class="icon">⊞</span> Command Center</a>
             </nav>
             <div class="sidebar-bottom">
                 <div id="statusIndicator" class="status-indicator">
@@ -40,17 +40,17 @@
                     <p class="subtitle">Universal Lead Intelligence Engine</p>
                 </div>
                 <div class="user-profile">
-                    <div class="avatar">MA</div>
+                    <div class="avatar">AI</div>
                 </div>
             </header>
 
-            <!-- Unified Command Interface -->
+            <!-- Command Interface -->
             <section class="command-section glass-panel">
                 <div class="command-tabs">
                     <button class="cmd-tab active" data-mode="mining" onclick="switchMode('mining')">🔍 Discovery Mode</button>
                     <button class="cmd-tab" data-mode="enriching" onclick="switchMode('enriching')">📂 Enrichment Mode</button>
                 </div>
-                
+
                 <div class="command-interface">
                     <div id="miningInput" class="input-group">
                         <input type="text" id="promptText" placeholder="e.g. Find all Indian beauty salons in Plano, TX with poor websites..." autocomplete="off">
@@ -59,11 +59,11 @@
                             <input type="number" id="limitMiner" value="10" min="1" max="50">
                         </div>
                     </div>
-                    
+
                     <div id="enrichingInput" class="input-group hidden">
                         <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
                             <span class="drop-icon">📥</span>
-                            <p>Drag & drop or <span>Click to Upload</span></p>
+                            <p>Drag &amp; drop or <span>Click to Upload</span></p>
                             <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" class="hidden-file-input" onchange="handleFileSelect(this)">
                             <p class="file-name" id="fileNameDisplay"></p>
                         </div>
@@ -72,67 +72,49 @@
                             <input type="number" id="limitEnricher" value="10" min="1" max="500">
                         </div>
                     </div>
-                    
+
                     <div class="action-row">
                         <button id="runCampaignBtn" class="primary-btn pulse-glow" onclick="runCampaign()">Initialize Pipeline <span class="arrow">→</span></button>
                     </div>
                 </div>
-            </section>
 
-            <!-- Results Section -->
-            <section class="results-dashboard">
-                <div class="stats-grid">
-                    <div class="stat-card glass-panel flex-row">
-                        <div class="stat-icon">📊</div>
-                        <div class="stat-info">
-                            <span class="stat-label">Total Leads</span>
-                            <span id="statTotal" class="stat-value">0</span>
-                        </div>
+                <!-- Minimalist System Status -->
+                <div class="system-status-bar">
+                    <div class="status-node">
+                        <span class="pulse-dot"></span> Intelligent Nodes <span class="dim">Online</span>
                     </div>
-                    <div class="stat-card glass-panel flex-row">
-                        <div class="stat-icon whatsapp-icon">💬</div>
-                        <div class="stat-info">
-                            <span class="stat-label">WhatsApp Verified</span>
-                            <span id="statSuccess" class="stat-value">0</span>
-                        </div>
+                    <div class="status-divider"></div>
+                    <div class="status-node">
+                        <span class="pulse-dot"></span> Data Engines <span class="dim">Secured</span>
                     </div>
-                    <div class="stat-card glass-panel flex-row">
-                        <div class="stat-icon">⏱</div>
-                        <div class="stat-info">
-                            <span class="stat-label">Processing Time</span>
-                            <span id="statLatency" class="stat-value">0s</span>
-                        </div>
+                    <div class="status-divider"></div>
+                    <div class="status-node">
+                        <span class="pulse-dot"></span> LPU AI <span class="dim">Ready</span>
                     </div>
-                </div>
-
-                <div id="loader" class="loader-container hidden">
-                    <div class="cyber-spinner"></div>
-                    <h3 id="loaderText">Mining Leads...</h3>
-                    <p>Executing Layer 1 Discovery</p>
-                </div>
-
-                <div id="emptyState" class="empty-state glass-panel">
-                    <div class="empty-icon">📡</div>
-                    <h3>Awaiting Intelligence Protocol</h3>
-                    <p>Enter a prompt or upload a dataset to begin the AI extraction workflow.</p>
-                </div>
-
-                <div id="resultsGrid" class="results-grid hidden">
-                    <!-- Cards will be injected here -->
                 </div>
             </section>
         </main>
     </div>
 
-    <!-- Details Modal -->
-    <div id="detailsModal" class="modal hidden">
-        <div class="modal-backdrop" onclick="closeModal()"></div>
-        <div class="modal-content glass-panel">
-            <button class="close-btn" onclick="closeModal()">×</button>
-            <div id="modalBody"></div>
+    <!-- Full-Screen Pipeline Loader Overlay -->
+    <div id="pipelineOverlay" class="pipeline-overlay hidden">
+        <div class="pipeline-overlay-content">
+            <div class="cyber-spinner-lg"></div>
+            <h2 id="overlayTitle">Initializing Pipeline...</h2>
+            <p id="overlaySubtitle">Connecting to intelligence network</p>
+            <div class="overlay-timer">
+                <span class="overlay-timer-label">Elapsed:</span>
+                <span id="overlayTimer" class="overlay-timer-val">0s</span>
+            </div>
+            <div class="overlay-steps">
+                <div class="ov-step active" id="ov1">⬡ Layer 1: Mining Google Maps</div>
+                <div class="ov-step" id="ov2">⬡ Layer 2: Scanning Websites</div>
+                <div class="ov-step" id="ov3">⬡ Layer 3: AI Research</div>
+
+            </div>
         </div>
     </div>
 
-    <script src="script.js?v=2.0"></script>
+    <script src="script.js?v=3.0"></script>
 </body>
 </html>

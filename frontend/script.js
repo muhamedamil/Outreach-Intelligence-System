@@ -1,17 +1,14 @@
-// frontend/script.js
+// frontend/script.js — Command Center Logic (v3.0)
 
 let currentMode = 'mining';
 let selectedFile = null;
+let overlayInterval = null;
 
 function switchMode(mode) {
     currentMode = mode;
-    
-    // Update tabs
     document.querySelectorAll('.cmd-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === mode);
     });
-
-    // Update visibility
     if (mode === 'mining') {
         document.getElementById('miningInput').classList.remove('hidden');
         document.getElementById('enrichingInput').classList.add('hidden');
@@ -30,16 +27,11 @@ function handleFileSelect(input) {
     }
 }
 
-// Drag & Drop functionality
+// Drag & Drop
 const dropZone = document.getElementById('dropZone');
 if (dropZone) {
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-    });
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('dragover');
-    });
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
@@ -50,215 +42,102 @@ if (dropZone) {
     });
 }
 
-async function runCampaign() {
-    const promptText = document.getElementById('promptText').value.trim();
-    
-    let formData = new FormData();
-    
-    if (currentMode === 'mining') {
-        if (!promptText) {
-            alert("Please enter a discovery prompt.");
-            return;
-        }
-        formData.append("prompt", promptText);
-        formData.append("limit", document.getElementById('limitMiner').value || 10);
-    } else {
-        if (!selectedFile) {
-            alert("Please upload a file to enrich.");
-            return;
-        }
-        formData.append("file", selectedFile);
-        formData.append("limit", document.getElementById('limitEnricher').value || 10);
-    }
+// Pipeline overlay step animation
+const STEP_LABELS = [
+    '⬡ Layer 1: Mining Google Maps',
+    '⬡ Layer 2: Scanning Websites',
+    '⬡ Layer 3: AI Research'
+];
+const STEP_SUBTITLES = [
+    'Querying Apify Maps Actor...',
+    'Deep-scanning business websites...',
+    'Analyzing reviews for pain points...'
+];
 
-    // UI Updates - loading
-    document.getElementById('emptyState').classList.add('hidden');
-    document.getElementById('resultsGrid').classList.add('hidden');
-    document.getElementById('loader').classList.remove('hidden');
-    document.getElementById('statusIndicator').classList.add('loading');
-    document.getElementById('statusText').innerText = "Analyzing Leads (Layers 1-4)...";
-    
-    const startTime = Date.now();
-    let durationInterval = setInterval(() => {
-        const secs = Math.floor((Date.now() - startTime) / 1000);
-        document.getElementById('statLatency').innerText = `${secs}s`;
+function showOverlay(prompt) {
+    const overlay = document.getElementById('pipelineOverlay');
+    overlay.classList.remove('hidden');
+    document.getElementById('overlayTitle').textContent = `Analyzing: "${prompt || 'Uploaded File'}"`;
+
+    // Reset steps
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`ov${i}`);
+        el.className = 'ov-step';
+        el.textContent = STEP_LABELS[i - 1];
+    }
+    document.getElementById('ov1').classList.add('active');
+
+    // Animate steps over time
+    const stepTimings = [0, 20000, 60000]; // rough timing hints for 3 steps
+    stepTimings.forEach((t, i) => {
+        setTimeout(() => {
+            for (let j = 1; j <= 3; j++) {
+                const el = document.getElementById(`ov${j}`);
+                if (j < i + 1) { el.className = 'ov-step done'; el.textContent = '✓ ' + STEP_LABELS[j - 1].slice(2); }
+                else if (j === i + 1) { el.className = 'ov-step active'; }
+                else { el.className = 'ov-step'; }
+            }
+            document.getElementById('overlaySubtitle').textContent = STEP_SUBTITLES[i] || '';
+        }, t);
+    });
+
+    // Timer
+    const start = Date.now();
+    overlayInterval = setInterval(() => {
+        const secs = Math.floor((Date.now() - start) / 1000);
+        document.getElementById('overlayTimer').textContent = `${secs}s`;
     }, 1000);
 
-    try {
-        const response = await fetch('/api/campaign', {
-            method: 'POST',
-            body: formData
-        });
+    // Update status
+    document.getElementById('statusIndicator').classList.add('loading');
+    document.getElementById('statusText').innerText = 'Pipeline Running...';
+}
 
-        clearInterval(durationInterval);
+function hideOverlay() {
+    clearInterval(overlayInterval);
+    document.getElementById('pipelineOverlay').classList.add('hidden');
+    document.getElementById('statusIndicator').classList.remove('loading');
+    document.getElementById('statusText').innerText = 'System Ready';
+}
+
+async function runCampaign() {
+    const promptText = document.getElementById('promptText').value.trim();
+    let formData = new FormData();
+
+    if (currentMode === 'mining') {
+        if (!promptText) { alert('Please enter a discovery prompt.'); return; }
+        formData.append('prompt', promptText);
+        formData.append('limit', document.getElementById('limitMiner').value || 10);
+    } else {
+        if (!selectedFile) { alert('Please upload a file to enrich.'); return; }
+        formData.append('file', selectedFile);
+        formData.append('limit', document.getElementById('limitEnricher').value || 10);
+    }
+
+    showOverlay(currentMode === 'mining' ? promptText : selectedFile.name);
+    document.getElementById('runCampaignBtn').disabled = true;
+
+    try {
+        const response = await fetch('/api/campaign', { method: 'POST', body: formData });
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || "Processing failed");
+            throw new Error(errorData.detail || 'Processing failed');
         }
 
         const data = await response.json();
-        
-        // Update Stats
-        document.getElementById('statTotal').innerText = data.summary.total_rows;
-        
-        let waCount = 0;
-        data.results.forEach(r => {
-            if (r.business_profile?.whatsapp_status === "DETECTED") waCount++;
-        });
-        document.getElementById('statSuccess').innerText = waCount;
-        
-        document.getElementById('statLatency').innerText = `${Math.round(data.summary.processing_time_sec)}s`;
 
-        renderGrid(data.results);
+        // Store results in sessionStorage and navigate to results page
+        sessionStorage.setItem('ois_results', JSON.stringify(data));
+        sessionStorage.setItem('ois_query', currentMode === 'mining' ? promptText : selectedFile.name);
 
-        document.getElementById('statusText').innerText = "System Ready";
-        document.getElementById('statusIndicator').classList.remove('loading');
-        document.getElementById('loader').classList.add('hidden');
-        document.getElementById('resultsGrid').classList.remove('hidden');
+        hideOverlay();
+        window.location.href = '/results.html';
 
     } catch (err) {
-        clearInterval(durationInterval);
-        alert(`Error: ${err.message}`);
-        document.getElementById('statusText').innerText = "System Error";
-        document.getElementById('statusIndicator').classList.remove('loading');
-        document.getElementById('loader').classList.add('hidden');
-        document.getElementById('emptyState').classList.remove('hidden');
+        hideOverlay();
+        document.getElementById('runCampaignBtn').disabled = false;
+        alert(`Pipeline Error: ${err.message}`);
+        document.getElementById('statusText').innerText = 'System Error';
     }
-}
-
-// Store results globally to open modal
-let globalResults = [];
-
-function renderGrid(results) {
-    globalResults = results;
-    const grid = document.getElementById('resultsGrid');
-    grid.innerHTML = '';
-
-    results.forEach((row, index) => {
-        const profile = row.business_profile || {};
-        
-        // Category styling
-        let catTag = "tag-dead";
-        let emoji = "🔴";
-        if (profile.category === "STATIC_WEBSITE") { catTag = "tag-static"; emoji = "🟡"; }
-        if (profile.category === "FULLY_AUTOMATED") { catTag = "tag-auto"; emoji = "🔵"; }
-
-        // WhatsApp styling
-        const isWa = profile.whatsapp_status === "DETECTED";
-        
-        const cardHtml = `
-            <div class="lead-card glass-panel" onclick="openModal(${index})">
-                <div class="card-header">
-                    <div class="company-info">
-                        <h3>${emoji} ${profile.name || "Unknown"}</h3>
-                        <div class="address-info">${profile.address || "No address"}</div>
-                    </div>
-                    <div class="score-badge">${profile.lead_score || 0}/100</div>
-                </div>
-                
-                <div>
-                    <span class="category-tag ${catTag}">${profile.category ? profile.category.replace('_', ' ') : 'NO WEBSITE'}</span>
-                </div>
-                
-                <div class="card-body">
-                    <div class="data-row">
-                        <span class="data-label">Phone</span>
-                        <span class="data-value">${profile.phone || 'N/A'}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">WhatsApp</span>
-                        <span class="data-value ${isWa ? 'wa-detected' : 'wa-none'}">${isWa ? 'VERIFIED ✓' : 'unverified'}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">Google Rating</span>
-                        <span class="data-value">${profile.google_rating || '0'}⭐ (${profile.google_review_count || 0})</span>
-                    </div>
-                </div>
-            </div>
-        `;
-        grid.insertAdjacentHTML('beforeend', cardHtml);
-    });
-}
-
-function openModal(index) {
-    const row = globalResults[index];
-    const profile = row.business_profile || {};
-    const outreach = row.outreach || {};
-    
-    let linksHtml = '';
-    if (profile.website_url) linksHtml += `<a href="${profile.website_url}" target="_blank">🌐 Website</a>`;
-    if (profile.instagram_url) linksHtml += `<a href="${profile.instagram_url}" target="_blank">📸 Instagram</a>`;
-    if (profile.facebook_url) linksHtml += `<a href="${profile.facebook_url}" target="_blank">📘 Facebook</a>`;
-    if (profile.whatsapp_number) linksHtml += `<a href="https://wa.me/${profile.whatsapp_number.replace(/\D/g,'')}" target="_blank">💬 WhatsApp</a>`;
-
-    let reviewsHtml = '';
-    if (profile.reviews && profile.reviews.length > 0) {
-        profile.reviews.slice(0,3).forEach(r => {
-            if (!r) return;
-            reviewsHtml += `<div class="review-item">${r.stars || 5}⭐ "${r.text || ''}"</div>`;
-        });
-    } else {
-        reviewsHtml = '<p style="color:var(--text-muted);font-size:0.85rem">No detailed reviews available.</p>';
-    }
-
-    const modalBodyHtml = `
-        <div class="modal-header">
-            <h2 class="modal-title">${profile.name || "Unknown"}</h2>
-            <div class="modal-links">
-                ${linksHtml}
-            </div>
-        </div>
-        
-        <div class="modal-grid">
-            <div class="left-col">
-                <div class="info-section">
-                    <h4>Lead Intelligence Payload</h4>
-                    <div class="score-breakdown-code">${JSON.stringify({
-                        score_breakdown: profile.lead_score_breakdown || {},
-                        ai_research_insights: profile.ai_research_insights || {}
-                    }, null, 2)}</div>
-                </div>
-                
-                <div class="info-section" style="margin-top:24px">
-                    <h4>Recent Top Reviews</h4>
-                    <div class="review-list">
-                        ${reviewsHtml}
-                    </div>
-                </div>
-            </div>
-            
-            <div class="right-col">
-                <div class="info-section">
-                    <h4>Generated AI Outreach</h4>
-                    <div class="outreach-tabs">
-                        <div class="outreach-box">
-                            <small style="color:var(--accent-primary);text-transform:uppercase;font-weight:bold;display:block;margin-bottom:8px">💬 WhatsApp Draft</small>
-                            ${(outreach.whatsapp || "No WhatsApp draft generated.").replace(/\n/g, '<br>')}
-                        </div>
-                        <div class="outreach-box" style="margin-top:12px">
-                            <small style="color:var(--accent-secondary);text-transform:uppercase;font-weight:bold;display:block;margin-bottom:8px">📸 Instagram Draft</small>
-                            ${(outreach.instagram || "No Instagram draft generated.").replace(/\n/g, '<br>')}
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="info-section" style="margin-top:24px">
-                    <h4>Internal Metadata</h4>
-                    <div style="font-size:0.85rem;color:var(--text-muted);display:flex;flex-direction:column;gap:4px">
-                        <span><strong>Phone Raw:</strong> ${profile.phone_unformatted || 'N/A'}</span>
-                        <span><strong>Booking Tech:</strong> ${profile.booking_system || 'None Detected'}</span>
-                        <span><strong>Web Status:</strong> ${profile.website_status || 'UNKNOWN'}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.getElementById('modalBody').innerHTML = modalBodyHtml;
-    document.getElementById('detailsModal').classList.remove('hidden');
-}
-
-function closeModal() {
-    document.getElementById('detailsModal').classList.add('hidden');
 }

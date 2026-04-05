@@ -1,9 +1,7 @@
-from typing import Optional
+from typing import Optional, List, Any, Dict
 import time
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from app.services.file_processor.excel_processor import process_excel_content
-from app.services.campaign.campaign_manager import run_full_campaign
-from app.utils.response_formatter import format_final_response
+from pydantic import BaseModel
 from app.api.schemas import BatchResponse
 from app.utils.logger import get_logger
 from app.config.settings import settings
@@ -13,10 +11,22 @@ logger = get_logger(__name__)
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
+
+# ── Request Models ──
+class SingleOutreachRequest(BaseModel):
+    lead: Dict[str, Any]
+
+class BatchOutreachRequest(BaseModel):
+    leads: List[Dict[str, Any]]
+
+
+# ── Health ──
 @router.get("/health")
 async def health():
     return {"status": "ok"}
 
+
+# ── PHASE 1: Discovery Campaign (Layers 1–3, no outreach) ──
 @router.post("/campaign", response_model=BatchResponse)
 async def run_campaign_api(
     prompt: Optional[str] = Form(None),
@@ -34,37 +44,70 @@ async def run_campaign_api(
         if file:
             if not file.filename.endswith((".xlsx", ".xls", ".csv")):
                 raise HTTPException(status_code=400, detail="Invalid file type")
+            from app.services.file_processor.excel_processor import process_excel_content
             contents = await file.read()
             if len(contents) > MAX_FILE_SIZE:
                 raise HTTPException(status_code=400, detail="File too large")
             raw_results = await process_excel_content(contents, file.filename, limit=limit)
         else:
-            # Mining Mode
-            raw_results = await run_full_campaign(prompt=prompt, limit=limit)
+            from app.services.campaign.campaign_manager import run_discovery_campaign
+            raw_results = await run_discovery_campaign(prompt=prompt, limit=limit)
 
-        # Map new LeadProfile structure to legacy expected format for frontend compatibility
         formatted_results = []
         for i, res in enumerate(raw_results):
             lead = res["lead"]
-            # model_dump() ensures deep serialization to a dict, avoiding Pydantic 'int vs dict' confusion
             business_data = lead.model_dump() if hasattr(lead, "model_dump") else lead
-            
             formatted_results.append({
                 "status": "success",
                 "business_profile": business_data,
-                "outreach": res.get("campaign_outreach"),
-                "row_id": i + 1  # Safe integer increment
+                "outreach": None,   # Outreach is generated on-demand via /api/outreach/*
+                "row_id": i + 1
             })
 
         total_time = round((time.time() - start_time), 2)
+        from app.utils.response_formatter import format_final_response
         response = format_final_response(formatted_results, total_time)
 
         if settings.DEBUG:
             response["debug"] = {"processing_time": total_time}
 
-        logger.info(f"Processing completed in {total_time}s")
+        logger.info(f"Discovery pipeline completed in {total_time}s")
         return response
 
     except Exception as e:
         logger.error(f"Campaign API failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+# ── PHASE 2a: Generate outreach for a SINGLE lead ──
+@router.post("/outreach/single")
+async def generate_single_outreach(payload: SingleOutreachRequest):
+    """
+    Accepts a serialized LeadProfile dict, runs Layer 4 (outreach writer),
+    returns the generated outreach drafts.
+    """
+    logger.info(f"Single outreach request for: {payload.lead.get('name', 'Unknown')}")
+    try:
+        from app.services.campaign.campaign_manager import run_outreach_for_lead
+        outreach = await run_outreach_for_lead(payload.lead)
+        return {"success": True, "outreach": outreach}
+    except Exception as e:
+        logger.error(f"Single outreach API failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Outreach generation failed: {str(e)}")
+
+
+# ── PHASE 2b: Generate outreach for ALL/MULTIPLE leads (batch) ──
+@router.post("/outreach/batch")
+async def generate_batch_outreach(payload: BatchOutreachRequest):
+    """
+    Accepts a list of serialized LeadProfile dicts, runs Layer 4 for each,
+    returns list of {name, outreach, status}.
+    """
+    logger.info(f"Batch outreach request for {len(payload.leads)} leads")
+    try:
+        from app.services.campaign.campaign_manager import run_outreach_for_batch
+        results = await run_outreach_for_batch(payload.leads)
+        return {"success": True, "results": results, "total": len(results)}
+    except Exception as e:
+        logger.error(f"Batch outreach API failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch outreach failed: {str(e)}")

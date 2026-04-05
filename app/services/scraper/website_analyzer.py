@@ -974,8 +974,10 @@ def _is_cloudflare_blocked(text: str, html: str) -> bool:
     return any(sig in text or sig in html for sig in CLOUDFLARE_SIGNATURES)
 
 
+
 # ─────────────────────────────────────────────
 # COOKIE CONSENT DISMISSAL
+
 # ─────────────────────────────────────────────
 
 

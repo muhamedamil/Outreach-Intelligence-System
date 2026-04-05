@@ -4,6 +4,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+print("In Settings class definition...")
 class Settings(BaseSettings):
     # -------------------------
     # APP
@@ -47,4 +48,6 @@ class Settings(BaseSettings):
     )
 
 
+print("Instantiating settings...")
 settings = Settings()
+print("Settings instantiated.")

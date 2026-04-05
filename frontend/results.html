@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Results | Outreach Intelligence Hub</title>
+    <meta name="description" content="Lead intelligence results with real-time filters, email, and on-demand AI outreach generation.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="results.css">
+</head>
+<body>
+    <div class="bg-glow blob-1"></div>
+    <div class="bg-glow blob-2"></div>
+
+    <div class="results-app">
+
+        <!-- TOP NAVIGATION BAR -->
+        <header class="results-topbar">
+            <div class="topbar-left">
+                <a href="/" class="back-btn">
+                    <span class="back-arrow">←</span>
+                    <span>New Campaign</span>
+                </a>
+                <div class="topbar-divider"></div>
+                <div class="query-pill">
+                    <span class="query-icon">🔍</span>
+                    <span id="queryLabel" class="query-text">Loading results...</span>
+                </div>
+            </div>
+
+            <div class="topbar-stats">
+                <div class="t-stat">
+                    <span class="t-val" id="statTotal">—</span>
+                    <span class="t-label">Total Leads</span>
+                </div>
+                <div class="t-divider"></div>
+                <div class="t-stat">
+                    <span class="t-val accent-green" id="statHighScore">—</span>
+                    <span class="t-label">Score 60+</span>
+                </div>
+                <div class="t-divider"></div>
+                <div class="t-stat">
+                    <span class="t-val accent-whatsapp" id="statWhatsapp">—</span>
+                    <span class="t-label">WhatsApp</span>
+                </div>
+                <div class="t-divider"></div>
+                <div class="t-stat">
+                    <span class="t-val" id="statTime">—</span>
+                    <span class="t-label">Process Time</span>
+                </div>
+            </div>
+
+            <div class="topbar-actions">
+                <button class="export-btn" id="exportBtn" onclick="exportCSV()">⬇ Export CSV</button>
+            </div>
+        </header>
+
+        <div class="results-body">
+            
+            <div class="filter-backdrop hidden" id="filterBackdrop" onclick="toggleFilterPanel(false)"></div>
+
+            <!-- FILTER SIDEBAR -->
+            <aside class="filter-sidebar" id="filterSidebar">
+                <div class="filter-sidebar-inner">
+
+                    <div class="filter-header">
+                        <h3 class="filter-title">Filters</h3>
+                        <div style="display:flex; gap:8px;">
+                            <button class="reset-all-btn" onclick="resetFilters()">Reset All</button>
+                            <button class="close-filter-btn" onclick="toggleFilterPanel(false)">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- Category -->
+                    <div class="filter-group">
+                        <label class="filter-label">Category</label>
+                        <div class="filter-chips" id="categoryChips">
+                            <button class="filter-chip active" data-value="all" onclick="handleChipClick('category', this)">All</button>
+                            <button class="filter-chip" data-value="STATIC_WEBSITE" onclick="handleChipClick('category', this)">Static Website</button>
+                            <button class="filter-chip" data-value="NO_WEBSITE" onclick="handleChipClick('category', this)">No Website</button>
+                            <button class="filter-chip" data-value="FULLY_AUTOMATED" onclick="handleChipClick('category', this)">Fully Automated</button>
+                        </div>
+                    </div>
+
+                    <!-- Min Lead Score -->
+                    <div class="filter-group">
+                        <label class="filter-label">
+                            Min Lead Score
+                            <span class="filter-val-badge" id="scoreVal">0</span>
+                        </label>
+                        <input type="range" id="scoreFilter" min="0" max="100" value="0" class="filter-range" oninput="onScoreChange(this)">
+                        <div class="range-labels"><span>0</span><span>50</span><span>100</span></div>
+                    </div>
+
+                    <!-- WhatsApp Status -->
+                    <div class="filter-group">
+                        <label class="filter-label">WhatsApp Status</label>
+                        <div class="filter-chips" id="waChips">
+                            <button class="filter-chip active" data-value="all" onclick="handleChipClick('wa', this)">All</button>
+                            <button class="filter-chip wa-chip" data-value="DETECTED" onclick="handleChipClick('wa', this)">Detected</button>
+                            <button class="filter-chip" data-value="NOT_DETECTED" onclick="handleChipClick('wa', this)">Not Detected</button>
+                        </div>
+                    </div>
+
+                    <!-- Min Google Rating -->
+                    <div class="filter-group">
+                        <label class="filter-label">Min Google Rating</label>
+                        <div class="filter-chips" id="ratingChips">
+                            <button class="filter-chip active" data-value="0" onclick="handleChipClick('rating', this)">Any</button>
+                            <button class="filter-chip" data-value="3.5" onclick="handleChipClick('rating', this)">3.5+ ⭐</button>
+                            <button class="filter-chip" data-value="4.0" onclick="handleChipClick('rating', this)">4.0+ ⭐</button>
+                            <button class="filter-chip" data-value="4.5" onclick="handleChipClick('rating', this)">4.5+ ⭐</button>
+                        </div>
+                    </div>
+
+
+
+                    <!-- City / State Search -->
+                    <div class="filter-group">
+                        <label class="filter-label">City / State</label>
+                        <input type="text" id="cityFilter" class="filter-text-input" placeholder="e.g. Dallas, TX..." oninput="applyFilters()">
+                    </div>
+
+                    <!-- Outreach Status -->
+                    <div class="filter-group">
+                        <label class="filter-label">Outreach Status</label>
+                        <div class="filter-chips" id="outreachChips">
+                            <button class="filter-chip active" data-value="all" onclick="handleChipClick('outreach', this)">All</button>
+                            <button class="filter-chip" data-value="ready" onclick="handleChipClick('outreach', this)">✓ Ready</button>
+                            <button class="filter-chip" data-value="pending" onclick="handleChipClick('outreach', this)">Pending</button>
+                        </div>
+                    </div>
+
+                    <!-- Sort By -->
+                    <div class="filter-group">
+                        <label class="filter-label">Sort By</label>
+                        <select id="sortFilter" class="filter-select" onchange="applyFilters()">
+                            <option value="score_desc">Score (High → Low)</option>
+                            <option value="rating_desc">Rating (High → Low)</option>
+                            <option value="reviews_desc">Reviews (Most First)</option>
+                            <option value="name_asc">Name (A → Z)</option>
+                        </select>
+                    </div>
+
+                </div>
+            </aside>
+
+            <!-- MAIN RESULTS AREA -->
+            <main class="results-main">
+
+                <!-- Results Toolbar -->
+                <div class="results-toolbar">
+                    <div style="display:flex; align-items:center; gap:16px;">
+                        <button class="filters-toggle-btn" onclick="toggleFilterPanel()">
+                            <span>☰ Filters</span>
+                        </button>
+                        <div class="results-count-wrap">
+                            <span class="results-count">
+                                Showing <strong id="countShown">0</strong> of <strong id="countTotal">0</strong> leads
+                            </span>
+                        </div>
+                    </div>
+                    <div class="toolbar-actions">
+                        <button class="process-all-btn" id="processAllBtn" onclick="processAllOutreach()">
+                            <span class="pa-icon">⚡</span>
+                            <span class="pa-label">Process All Outreach</span>
+                            <span class="pa-progress hidden" id="paProgress">0 / 0</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- List View (only view) -->
+                <div id="resultsList" class="results-list">
+                    <div class="list-header">
+                        <div class="lh-score" onclick="sortByColumn('score')">Score ↕</div>
+                        <div class="lh-name" onclick="sortByColumn('name')">Business ↕</div>
+                        <div class="lh-address">Address</div>
+                        <div class="lh-website">Website</div>
+                        <div class="lh-category">Category</div>
+                        <div class="lh-phone">Phone</div>
+                        <div class="lh-whatsapp">WhatsApp</div>
+                        <div class="lh-rating" onclick="sortByColumn('rating')">Rating ↕</div>
+                        <div class="lh-outreach">Outreach</div>
+                        <div class="lh-action"></div>
+                    </div>
+                    <div id="listBody"></div>
+                </div>
+
+                <!-- Empty Filter State -->
+                <div id="emptyFiltered" class="empty-filtered hidden">
+                    <div class="ef-icon">🔍</div>
+                    <h3>No leads match your filters</h3>
+                    <p>Try adjusting the filters on the left to see more results.</p>
+                    <button class="reset-large-btn" onclick="resetFilters()">Reset All Filters</button>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <!-- DETAIL SLIDE-OVER PANEL -->
+    <div id="slideOver" class="slideover hidden">
+        <div class="slideover-backdrop" onclick="closeSlideOver()"></div>
+        <div class="slideover-panel" id="slideOverPanel">
+            <div class="slideover-topbar">
+                <div class="so-nav">
+                    <button class="so-nav-btn" onclick="navigateLead(-1)" id="prevLeadBtn">← Prev</button>
+                    <span class="so-nav-label" id="leadNavLabel">1 / 1</span>
+                    <button class="so-nav-btn" onclick="navigateLead(1)" id="nextLeadBtn">Next →</button>
+                </div>
+                <button class="so-close-btn" onclick="closeSlideOver()">×</button>
+            </div>
+            <div id="slideoverBody" class="slideover-body"></div>
+        </div>
+    </div>
+
+    <script src="results.js"></script>
+</body>
+</html>

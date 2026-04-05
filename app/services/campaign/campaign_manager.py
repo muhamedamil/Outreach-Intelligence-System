@@ -2,15 +2,15 @@
 #
 # The Orchestrator: The Main Engine of the Four-Layer Salon Pipeline
 #
-# Connects everything from Layer 0 (Input) to Layer 4 (Outreach).
+# PHASE 1 (run_discovery_campaign): Layers 1–3 — fast discovery + enrichment
+# PHASE 2 (run_outreach_for_lead / run_outreach_for_batch): Layer 4 on-demand
 
 import logging
 import asyncio
 import sys
 from typing import List, Dict, Any, Optional
 
-# CRITICAL WINDOWS FIX: 
-# Playwright and subprocesses require ProactorEventLoop on Windows
+# CRITICAL WINDOWS FIX:
 if sys.platform == 'win32':
     try:
         from asyncio import WindowsProactorEventLoopPolicy
@@ -29,29 +29,26 @@ from app.agents.outreach_writer.agent import generate_lead_outreach
 
 logger = logging.getLogger(__name__)
 
-async def run_full_campaign(
+
+async def run_discovery_campaign(
     prompt: Optional[str] = None,
     file_content: Optional[bytes] = None,
     file_name: Optional[str] = None,
     limit: int = 10
 ) -> List[Dict[str, Any]]:
     """
-    The main execution engine for high-intelligence lead outreach.
+    PHASE 1: Layers 1–3 only.
+    Runs Discovery + Website Analysis + AI Research.
+    Does NOT generate outreach. Returns results with outreach=None.
     """
-    logger.info("🚀 --- STARTING FULL FOUR-LAYER PIPELINE ---")
+    logger.info("--- STARTING DISCOVERY PIPELINE (Layers 1-3) ---")
 
-    # ──────────────────────────────────────
-    # LAYER 0: THE GATEKEEPER (Input)
-    # ──────────────────────────────────────
+    # LAYER 0: Input parsing
     spec: LeadSpec = await parse_user_input(prompt, file_content, file_name)
-    
-    # ──────────────────────────────────────
-    # LAYER 1: THE MINER (Discovery/Enrichment)
-    # ──────────────────────────────────────
+
+    # LAYER 1: Discovery or Enrichment
     leads: List[LeadProfile] = []
-    
     if spec.mode == "DISCOVERY":
-        # Broad lookup by persona/location
         leads = await search_leads(
             location=spec.location or "USA",
             queries=spec.queries,
@@ -59,7 +56,6 @@ async def run_full_campaign(
             max_results=limit
         )
     else:
-        # Targeted metadata lookup for the Excel list
         leads = await enrich_leads(
             leads=spec.provided_leads,
             industry=spec.industry,
@@ -70,46 +66,91 @@ async def run_full_campaign(
         logger.warning("No leads found in Layer 1. Pipeline stopping.")
         return []
 
-    logger.info(f"📍 Found {len(leads)} leads to process...")
+    logger.info(f"Found {len(leads)} leads to process...")
 
     results = []
 
-    # ──────────────────────────────────────
-    # LAYERS 2-4: THE REFINER, BRAIN, AND CLOSER
-    # (Processed lead-by-lead for high quality)
-    # ──────────────────────────────────────
     for i, lead in enumerate(leads[:limit]):
-        logger.info(f"[{i+1}/{limit}] --- Processing: {lead.name} ---")
-        
+        logger.info(f"[{i+1}/{limit}] Processing: {lead.name}")
         try:
-            # LAYER 2: THE REFINER (Deterministic Technical Check)
-            # Find buckets + missing socials (WhatsApp active verification disabled)
+            # LAYER 2: Website analysis + social resolver
             lead = await analyze_lead_website(lead)
             lead = await resolve_missing_socials(lead)
 
-            # LAYER 3: THE BRAIN (AI Sentiment Hook)
-            # Find pain points in reviews
+            # LAYER 3: AI research (pain points, hooks, score)
             lead = await run_lead_researcher(lead)
 
-            # LAYER 4: THE CLOSER (Multi-Channel Copy)
-            # Generate the final pitches
-            outreach = await generate_lead_outreach(lead)
+            logger.info(f"[{lead.name}] Score: {lead.lead_score} | Insights: {lead.ai_research_insights is not None}")
 
-            # Package the final intelligence object
-            logger.info(f"[{lead.name}] DEBUG - Breakdown: {lead.lead_score_breakdown}")
-            logger.info(f"[{lead.name}] DEBUG - Insights: {lead.ai_research_insights}")
-            
             results.append({
                 "lead": lead.model_dump(),
-                "campaign_outreach": outreach
+                "campaign_outreach": None   # Outreach generated on-demand in Phase 2
             })
-            
-            # Rate limit/Congestion safety
+
             await asyncio.sleep(1)
 
         except Exception as e:
             logger.error(f"Error processing {lead.name}: {str(e)}")
             continue
 
-    logger.info(f"✅ --- PIPELINE COMPLETE | Total Enriched Results: {len(results)} ---")
+    logger.info(f"DISCOVERY COMPLETE | Enriched: {len(results)} leads")
     return results
+
+
+async def run_outreach_for_lead(lead_data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    PHASE 2 (Single): Layer 4 — generate outreach for ONE lead.
+    Accepts a serialized LeadProfile dict, returns outreach dict.
+    """
+    try:
+        lead = LeadProfile(**lead_data)
+    except Exception as e:
+        logger.error(f"Failed to reconstruct LeadProfile: {e}")
+        return {
+            "whatsapp": "Could not generate outreach — invalid lead data.",
+            "instagram": "Could not generate outreach — invalid lead data.",
+            "selected_angle": "error"
+        }
+
+    logger.info(f"[{lead.name}] Generating outreach (on-demand)...")
+    return await generate_lead_outreach(lead)
+
+
+async def run_outreach_for_batch(leads_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    PHASE 2 (Batch): Layer 4 — generate outreach for MULTIPLE leads.
+    Returns list of {name, outreach} dicts.
+    """
+    logger.info(f"Starting batch outreach generation for {len(leads_data)} leads...")
+    results = []
+    for i, lead_data in enumerate(leads_data):
+        try:
+            lead = LeadProfile(**lead_data)
+            logger.info(f"[{i+1}/{len(leads_data)}] Generating outreach for {lead.name}")
+            outreach = await generate_lead_outreach(lead)
+            results.append({
+                "name": lead.name,
+                "outreach": outreach,
+                "status": "success"
+            })
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Batch outreach error for lead {i}: {e}")
+            results.append({
+                "name": lead_data.get("name", "Unknown"),
+                "outreach": None,
+                "status": "error"
+            })
+    logger.info(f"Batch outreach complete: {len(results)} processed")
+    return results
+
+
+# Keep backward-compatibility alias for any code that imports run_full_campaign
+async def run_full_campaign(
+    prompt: Optional[str] = None,
+    file_content: Optional[bytes] = None,
+    file_name: Optional[str] = None,
+    limit: int = 10
+) -> List[Dict[str, Any]]:
+    """Backward-compatible alias — runs discovery only (no outreach generation)."""
+    return await run_discovery_campaign(prompt, file_content, file_name, limit)
