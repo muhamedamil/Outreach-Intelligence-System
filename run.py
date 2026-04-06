@@ -29,10 +29,16 @@ if __name__ == "__main__":
     # Step 2: Run WITHOUT --reload to preserve the ProactorEventLoop
     # The --reload flag forces SelectorEventLoop on Windows, which
     # makes Playwright crash with NotImplementedError.
+    #
+    # workers=4: Allows the dashboard UI to remain accessible while
+    # a long-running Apify/Playwright campaign is processing in another
+    # worker. Without multiple workers, a single blocking campaign would
+    # lock the entire server and make the page appear unreachable.
     uvicorn.run(
         "app.main:app", 
         host="127.0.0.1", 
         port=8001,
-        reload=False,   # CRITICAL: --reload breaks Playwright on Windows
+        reload=False,       # CRITICAL: --reload breaks Playwright on Windows
+        workers=4,          # Serve UI + handle campaigns concurrently
         log_level="info"
     )

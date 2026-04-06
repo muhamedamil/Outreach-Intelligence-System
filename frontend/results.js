@@ -566,28 +566,76 @@ function resetFilters() {
 // ──────────────────────────────────────
 // CSV EXPORT
 // ──────────────────────────────────────
+
+/** Strip HTML tags from a string (e.g. <br> injected for display) */
+function stripHtml(str) {
+    return String(str || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();
+}
+
+/** Sanitise a single CSV cell value:
+ *  1. Strip any HTML tags (outreach drafts can contain <br>)
+ *  2. Replace embedded newlines with a space so a single lead stays on one CSV row
+ *  3. Escape double-quotes by doubling them
+ *  4. Wrap in double-quotes
+ */
+function csvCell(val) {
+    const clean = stripHtml(val)
+        .replace(/\r\n/g, ' ')   // Windows line endings → space
+        .replace(/\n/g, ' ')     // Unix line endings   → space
+        .replace(/\r/g, ' ');    // Old Mac line endings→ space
+    return `"${clean.replace(/"/g, '""')}"`;
+}
+
 function exportCSV() {
     if (!filteredResults.length) return;
-    const headers = ['Name','Category','Lead Score','Phone','WhatsApp','Google Rating','Reviews','Address','Website','Instagram','Facebook','Outreach Status','WA Draft','IG Draft'];
+
+    const headers = [
+        'Name', 'Category', 'Lead Score', 'Phone', 'WhatsApp Status',
+        'Google Rating', 'Review Count', 'Address', 'City', 'State',
+        'Website', 'Instagram', 'Facebook', 'WhatsApp Number',
+        'Booking System', 'Website Status', 'Outreach Status',
+        'WA Draft', 'IG Draft'
+    ];
+
     const rows = filteredResults.map(r => {
         const p = r.business_profile || {};
         const o = globalResults[r._origIdx]?.outreach || {};
         const state = outreachState[r._origIdx] || 'idle';
+
         return [
-            p.name||'', p.category||'', p.lead_score||0,
-            p.phone||'', p.whatsapp_status||'',
-            p.google_rating||'', p.google_review_count||0,
-            p.address||'', p.website_url||'', p.instagram_url||'', p.facebook_url||'',
-            state, o.whatsapp||'', o.instagram||''
-        ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',');
+            p.name || '',
+            p.category || '',
+            p.lead_score || 0,
+            p.phone_unformatted || p.phone || '',
+            p.whatsapp_status || '',
+            p.google_rating || '',
+            p.google_review_count || 0,
+            p.address || '',
+            p.city || '',
+            p.state || '',
+            p.website_url || '',
+            p.instagram_url || '',
+            p.facebook_url || '',
+            p.whatsapp_number || '',
+            p.booking_system || '',
+            p.website_status || '',
+            state,
+            o.whatsapp || '',
+            o.instagram || ''
+        ].map(csvCell).join(',');
     });
-    const csv = [headers.join(','), ...rows].join('\n');
+
+    // BOM (\uFEFF) is prepended so Excel on Windows opens UTF-8 correctly
+    const csv = '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `outreach_leads_${Date.now()}.csv`;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
+    a.href = url;
+    a.download = `outreach_leads_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 // ──────────────────────────────────────
