@@ -13,18 +13,20 @@ async def test_traceability():
         industry="Automobile Dealer"
     )
     
-    print("\n--- TESTING LEAD: India Commercial Services (Traceability) ---")
+    print("\n--- TESTING LEAD: India Commercial Services (Consensus Engine) ---")
     enriched_lead = await run_multisite_contact_scraper(lead)
     
     print("\n[RESULT]")
     print(f"Name: {enriched_lead.name}")
-    print(f"Phone: {enriched_lead.phone}")
-    print(f"Sources: {enriched_lead.ai_research_insights.get('phone_sources')}")
+    print(f"Phone (Selected): {enriched_lead.phone}")
+    consensus = enriched_lead.ai_research_insights.get('phone_consensus', {})
+    for num, data in consensus.items():
+        print(f" -> {num} | Score: {data['score']} | Sources: {[s.get('url') or s.get('type') for s in data['sources']]}")
     
-    if enriched_lead.ai_research_insights.get('phone_sources'):
-        print("✅ SUCCESS: Phone sources captured.")
+    if consensus:
+        print("✅ SUCCESS: Phone consensus engine computed.")
     else:
-        print("❌ ERROR: No phone sources captured.")
+        print("❌ ERROR: No phone consensus captured.")
 
 if __name__ == "__main__":
     asyncio.run(test_traceability())

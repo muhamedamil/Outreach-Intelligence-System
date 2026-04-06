@@ -17,22 +17,34 @@ STARTURL_BLACKLIST = [
     'apollo.io', 'indiamart.com', 'justdial.com',
      'instagram.com', 'twitter.com', 'youtube.com',
     'tatamotors.com', 'mahindra.com', 'ashokleyland.com',
-    'zaubacorp.com', 'tracxn.com', 'tofler.in', 'economictimes.indiatimes.com'
+    'zaubacorp.com', 'tracxn.com', 'tofler.in', 'economictimes.indiatimes.com',
+    'tradeindia.com', 'exportersindia.com', 'enfsolar.com', 'solaralmanac.info',
+    'indialog.com', 'dir.indiamart.com'
 ]
+
+def _normalize_phone(raw_phone: str) -> str:
+    """Standardizes Indian phone numbers to base 10-digits (or 11 digit landlines)."""
+    digits = re.sub(r'\D', '', raw_phone)
+    if not digits: return raw_phone
+    if digits.startswith('91') and len(digits) == 12:
+        return digits[2:] # Keep only the 10 digits
+    if digits.startswith('0') and len(digits) == 11:
+        return digits # Keep landlines with STD code
+    return digits # Return plain digits for others
 
 # Regex for detecting phone numbers
 PHONE_REGEX = re.compile(r'(?:\+?91[\-\s]?)?[6789]\d{9}|\+?1?\s*[-.\s]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}')
 
-async def _get_precision_contacts_via_tavily(lead: LeadProfile) -> tuple[List[Dict[str, str]], Dict[str, str], Optional[str]]:
+async def _get_precision_contacts_via_tavily(lead: LeadProfile) -> tuple[List[Dict[str, str]], List[Dict[str, str]], Optional[str]]:
     """
     Returns:
       1. startUrls for Apify.
-      2. phone_to_url (mapping from snippet phone to its source URL).
+      2. List of dicts [{"phone": raw, "url": source_url}] from snippets.
       3. ai_answer (direct AI extraction).
     """
     query = f"What is the contact phone number for {lead.name} in {lead.state} India? Find local branch numbers specifically."
     start_urls = []
-    phone_to_url = {}
+    snippet_phones = []
     ai_answer = None
     
     try:
@@ -72,7 +84,10 @@ async def _get_precision_contacts_via_tavily(lead: LeadProfile) -> tuple[List[Di
                         
                         # If lead name or state is in the direct context, it's a high-confidence local number
                         if any(word in context for word in name_words) or (lead.state and lead.state.lower() in context):
-                             phone_to_url[phone_val] = result.get("url")
+                             snippet_phones.append({
+                                 "phone": phone_val,
+                                 "url": result.get("url")
+                             })
                     
                     # FILTER: Select high-quality StartURLs for deep crawl
                     if url and not any(b in url for b in STARTURL_BLACKLIST):
@@ -84,7 +99,7 @@ async def _get_precision_contacts_via_tavily(lead: LeadProfile) -> tuple[List[Di
     except Exception as e:
         logger.error(f"[{lead.name}] Tavily Precision Search failed: {e}")
         
-    return start_urls, phone_to_url, ai_answer
+    return start_urls, snippet_phones, ai_answer
 
 def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: str) -> Dict[str, Any]:
     """Runs the Apify client and parses results with source URLs."""
@@ -115,7 +130,7 @@ def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: s
             "instagrams": set(),
             "twitters": set(),
             "facebooks": set(),
-            "phone_to_url": {} # New mapping field
+            "phone_list": [] # List of {"phone": raw, "url": source_url}
         }
         
         for item in client.dataset(dataset_id).iterate_items():
@@ -126,7 +141,7 @@ def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: s
             
             for p in target.get("phones", []) + target.get("phonesUncertain", []):
                 contacts["phones"].add(p)
-                if page_url: contacts["phone_to_url"][p] = page_url
+                if page_url: contacts["phone_list"].append({"phone": p, "url": page_url})
                 
             for e in target.get("emails", []): 
                 contacts["emails"].add(e)
@@ -154,29 +169,49 @@ async def run_multisite_contact_scraper(lead: LeadProfile) -> LeadProfile:
     logger.info(f"[{lead.name}] Starting Precision Persona Scrape...")
     
     # STEP 1: AI Discovery + High-Confidence Snippets
-    start_urls, tavily_phone_sources, ai_answer = await _get_precision_contacts_via_tavily(lead)
+    start_urls, tavily_snippet_phones, ai_answer = await _get_precision_contacts_via_tavily(lead)
     
-    total_findings = set(tavily_phone_sources.keys())
-    phone_sources = {**tavily_phone_sources}
+    # ── CONSENSUS ENGINE: LEDGER INITIALIZATION ──
+    # Structure: normalized_phone: { "raw_formats": set(), "score": int, "sources": list({"type", "url"}) }
+    phone_ledger: Dict[str, Any] = {}
+    
+    def _add_to_ledger(raw_phone: str, source_type: str, url: str = None, points: int = 0):
+        norm = _normalize_phone(raw_phone)
+        if len(norm) < 8: return # Skip invalid short numbers
+        
+        if norm not in phone_ledger:
+            phone_ledger[norm] = {"raw_formats": set(), "score": 0, "sources": []}
+            
+        phone_ledger[norm]["raw_formats"].add(raw_phone)
+        phone_ledger[norm]["score"] += points
+        
+        # Avoid duplicate source logs
+        if not any(s.get("url") == url for s in phone_ledger[norm]["sources"]):
+            phone_ledger[norm]["sources"].append({"type": source_type, "url": url})
+            
+    # Add User Input (Highest Priority)
+    if lead.phone:
+        for p in lead.phone.split(","):
+             _add_to_ledger(p.strip(), "user_input", points=100)
+
+    # Process Tavily Snippets
+    for item in tavily_snippet_phones:
+        _add_to_ledger(item["phone"], "tavily_snippet", item["url"], points=10)
     
     # If the AI Answer has a phone number, add it
     if ai_answer:
          answers_phones = PHONE_REGEX.findall(ai_answer)
          for ap in answers_phones:
-             total_findings.add(ap)
-             # Source is AI Synthesis from search urls
-             if start_urls: phone_sources[ap] = "AI synthesized from " + start_urls[0]["url"]
+             source_url = start_urls[0]["url"] if start_urls else None
+             _add_to_ledger(ap, "tavily_ai_answer", source_url, points=15)
              logger.info(f"[{lead.name}] AI Answer provided phone: {ap}")
     
     # STEP 2: Deep Scrape standalone domain if found
     if start_urls:
          apify_contacts = await asyncio.to_thread(_run_apify_contact_actor_sync, start_urls, lead.name)
          if apify_contacts:
-             for p in apify_contacts.get("phones", set()):
-                 total_findings.add(p)
-                 # Merge source URLs
-                 if p in apify_contacts.get("phone_to_url", {}):
-                     phone_sources[p] = apify_contacts["phone_to_url"][p]
+             for item in apify_contacts.get("phone_list", []):
+                 _add_to_ledger(item["phone"], "apify_official", item["url"], points=50)
              
              # Handle Emails with filtering
              SCRAPER_SERVICE_DOMAINS = ["fnshift", "apify", "practicaltools"]
@@ -202,38 +237,37 @@ async def run_multisite_contact_scraper(lead: LeadProfile) -> LeadProfile:
              if not lead.website_url:
                  lead.website_url = start_urls[0]["url"]
 
-    # STEP 3: Validate and Prioritize Local Numbers
-    validated_phones = []
+    # STEP 3: Consensus Voting & Selection
     
-    # Keep the user's provided number at index 0
-    if lead.phone and len(re.sub(r'\D', '', lead.phone)) >= 10:
-        validated_phones.append(lead.phone)
-
-    for p in total_findings:
-        digits = re.sub(r'\D', '', p)
-        # FILTER OUT 1800/800 TOLL FREE (Usually corporate/Tata)
-        if digits.startswith("1800") or digits.startswith("1860") or digits.startswith("800"):
-             logger.info(f"[{lead.name}] Deprecated toll-free/corporate number: {p}")
-             continue
+    # Apply Toll-Free Penalty
+    for norm, data in phone_ledger.items():
+        if norm.startswith("1800") or norm.startswith("1860") or norm.startswith("800"):
+             data["score"] -= 500
+             logger.info(f"[{lead.name}] Applied toll-free penalty to: {norm}")
              
-        if len(digits) >= 10 and digits != "1390001066":
-            validated_phones.append(p)
-
-    if validated_phones:
-        # Final unique set capped at 4
-        unique_final_phones = list(dict.fromkeys(validated_phones))[:4]
-        lead.phone = ", ".join(unique_final_phones)
+    # Sort by score descending
+    sorted_ledger = sorted(phone_ledger.items(), key=lambda x: x[1]["score"], reverse=True)
+    
+    if sorted_ledger:
+        # Take up to 4 top unique numbers
+        top_entries = sorted_ledger[:4]
         
-        # Store sources in insights
+        # Reconstruct the display string using the first raw format observed for the top numbers
+        lead.phone = ", ".join([list(data["raw_formats"])[0] for norm, data in top_entries])
+        
         if not lead.ai_research_insights:
             lead.ai_research_insights = {}
             
-        final_sources = {}
-        for p in unique_final_phones:
-            if p in phone_sources:
-                final_sources[p] = phone_sources[p]
-        
-        lead.ai_research_insights["phone_sources"] = final_sources
+        # Store full consensus metadata for frontend
+        consensus_data = {}
+        for norm, data in top_entries:
+            display_raw = list(data["raw_formats"])[0]
+            consensus_data[display_raw] = {
+                "score": data["score"],
+                "sources": data["sources"]
+            }
+            
+        lead.ai_research_insights["phone_consensus"] = consensus_data
         logger.info(f"[{lead.name}] Result for precise scrape: {lead.phone}")
     else:
         logger.info(f"[{lead.name}] No precise phone numbers found.")

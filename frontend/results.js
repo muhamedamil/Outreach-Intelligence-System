@@ -438,14 +438,19 @@ function renderSlideOver(filteredIdx) {
                             <strong>Phone Numbers:</strong>
                             ${(profile.phone || '').split(',').map(p => {
                                 const trimmed = p.trim();
-                                const source = (insights.phone_sources || {})[trimmed];
-                                if (source) {
-                                    const shortSource = source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-                                    return `<div style="display:flex; align-items:center; gap:6px">
-                                        <span>${escHtml(trimmed)}</span>
-                                        <a href="${escHtml(source)}" target="_blank" style="font-size:0.7rem; color:var(--accent-primary); text-decoration:underline">
-                                            (Source: ${escHtml(shortSource)})
-                                        </a>
+                                const info = (insights.phone_consensus || {})[trimmed];
+                                if (info) {
+                                    const sourcesHtml = info.sources.map(s => {
+                                        if (!s.url) return `<span title="${escHtml(s.type)}">${escHtml(s.type)}</span>`;
+                                        const shortSource = s.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] || s.type;
+                                        return `<a href="${escHtml(s.url)}" target="_blank" title="${escHtml(s.type)}" style="color:var(--accent-primary); text-decoration:underline;">${escHtml(shortSource)}</a>`;
+                                    }).join(', ');
+                                    
+                                    return `<div style="display:flex; flex-direction:column; gap:4px; margin-bottom:6px; padding-left:8px; border-left: 2px solid var(--accent-primary);">
+                                        <span style="font-weight:600; font-size:1.05em; color:#E2E8F0;">${escHtml(trimmed)}</span>
+                                        <span style="font-size:0.75rem; color:#94A3B8;">
+                                            Score: <strong style="color:${info.score > 40 ? '#10B981' : '#F59E0B'}">${info.score}</strong> | Sources: ${sourcesHtml}
+                                        </span>
                                     </div>`;
                                 }
                                 return `<span>${escHtml(trimmed)}</span>`;
