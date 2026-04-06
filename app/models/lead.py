@@ -220,8 +220,11 @@ class LeadProfile(BaseModel):
     whatsapp_number: Optional[str] = None
     whatsapp_confidence: str = "LOW"
     whatsapp_found_on_web: bool = False
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
     instagram_url: Optional[str] = None
     facebook_url: Optional[str] = None
+    twitter_url: Optional[str] = None
     tiktok_url: Optional[str] = None
     youtube_url: Optional[str] = None
     yelp_url: Optional[str] = None

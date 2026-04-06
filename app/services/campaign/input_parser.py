@@ -82,88 +82,85 @@ async def _parse_prompt(prompt: str) -> LeadSpec:
 
 
 def _map_columns(headers: List[str]) -> Dict[str, str]:
-    """Smart fuzzy mapper using synonym checking and difflib for messy Excel files."""
-    mapping = {
-        "name": ["name", "company", "business", "organization", "salon", "firm", "biz", "org", "account", "provider"],
-        "phone": ["phone", "ph", "mobile", "contact", "tel", "cell"],
-        "city": ["city", "town", "location"],
-        "state": ["state", "st", "province"],
-        "address": ["address", "street", "addr"]
-    }
-    
-    result = {}
-    for target, synonyms in mapping.items():
-        found = False
-        # 1. Broad substring match (highest priority for common terms)
-        for h in headers:
-            h_lower = str(h).lower().strip()
-            if any(syn in h_lower for syn in synonyms):
-                result[target] = h
-                found = True
-                break
-        
-        # 2. Fuzzy match fallback
-        if not found:
-            for syn in synonyms:
-                matches = difflib.get_close_matches(syn, [str(h) for h in headers], n=1, cutoff=0.7)
-                if matches:
-                    result[target] = matches[0]
-                    break
-    return result
+    """Deprecated. Using strict index-based mapping instead."""
+    pass
 
 async def _parse_file(content: bytes, filename: str) -> LeadSpec:
     """
-    Parses CSV or Excel files into a list of LeadProfile skeletons for enrichment,
-    using robust fuzzy column matching.
+    Parses CSV or Excel files into a list of LeadProfile skeletons for enrichment.
+    Uses strict rule-based mapping (Col 1: Location/State, Col 2: Name) per user requirement.
     """
     logger.info(f"Parsing file input: {filename}")
     
     try:
         if filename.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(content))
+            df = pd.read_csv(io.BytesIO(content), header=None)
         elif filename.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(io.BytesIO(content))
+            df = pd.read_excel(io.BytesIO(content), header=None)
         else:
             raise ValueError(f"Unsupported file format: {filename}")
 
-        columns = df.columns.tolist()
-        col_map = _map_columns(columns)
-        logger.info(f"Fuzzy Column Mapping Result: {col_map}")
-        
         # Detect industry loosely from filename, default to salon
         industry = "solar" if "solar" in filename.lower() else "salon"
+        country_code = "IN" if "solar" in filename.lower() else "US"
         
         leads = []
+        # Aggressive phone regex that handles local and international formats
+        phone_regex = re.compile(r'(?:\+?91[\-\s]?)?[6789]\d{9}|\+?1?\s*[-.\s]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}')
+
         for _, row in df.iterrows():
-            name = None
-            if "name" in col_map:
-                name = row.get(col_map["name"])
-            else:
-                name = row.iloc[0]  # Ultimate fallback: assume first column is the name
-                
-            if not name or pd.isna(name):
-                continue
-                
-            city = row.get(col_map.get("city", ""), "") if "city" in col_map else ""
-            state = row.get(col_map.get("state", ""), "") if "state" in col_map else ""
+            # Get non-null, non-empty values in order
+            row_vals = [str(x).strip() for x in row.values if pd.notna(x) and str(x).strip() and str(x).lower() != 'nan']
+            if not row_vals:
+                 continue
             
-            # Combine city & state intelligently (Layer 0 handling location spread across columns)
-            location_str = str(city) if pd.notna(city) else ""
-            if pd.notna(state) and str(state).strip():
-                location_str += f", {str(state)}"
-                
-            phone = str(row.get(col_map["phone"], "")) if "phone" in col_map and pd.notna(row.get(col_map["phone"])) else ""
-            address = str(row.get(col_map["address"], "")) if "address" in col_map and pd.notna(row.get(col_map["address"])) else ""
+            state = ""
+            name = ""
+            phone = ""
             
+            # Heuristic to find state and name based on order
+            filtered_vals = []
+            for v in row_vals:
+               # Skip purely numeric index values (handles strings like '1' and '1.0')
+               try:
+                   val_f = float(v)
+                   # If it's a small number, it's likely an index column
+                   if val_f < 10000:
+                       continue
+               except ValueError:
+                   pass
+                   
+               filtered_vals.append(v)
+               
+            if len(filtered_vals) >= 2:
+                # Based on user sample:
+                # filtered_vals[0] = 'RAJASTHAN'
+                # filtered_vals[1] = 'India Commercial Services'
+                state = filtered_vals[0]
+                name = filtered_vals[1]
+                
+                # Check for phone numbers in the REST of the row
+                for val in filtered_vals[2:]:
+                    # Heuristic for messy phones like "91 98449 33433" or "8047671280"
+                    stripped_val = re.sub(r'\D', '', val)
+                    if len(stripped_val) >= 10:
+                         phone = val
+                         break
+
+            # Skip header rows that got caught in the parser
+            header_keywords = ["phone", "email", "note", "alternate", "reachout", "index", "s.no", "state", "place"]
+            if not name or any(kw in name.lower() for kw in header_keywords):
+                 continue
+                 
             leads.append(LeadProfile(
-                name=str(name),
+                name=name,
                 industry=industry,
                 phone=phone,
-                city=location_str.strip(", "),
-                address=address
+                state=state,
+                country_code=country_code
             ))
             
-        logger.info(f"Successfully extracted {len(leads)} {industry} leads from file.")
+        logger.info(f"Successfully extracted {len(leads)} {industry} leads from file via rule-based parsing.")
         
         return LeadSpec(
             mode="ENRICHMENT",

@@ -434,7 +434,23 @@ function renderSlideOver(filteredIdx) {
                         <span><strong>Category:</strong> ${profile.category || '—'}</span>
                         <span><strong>Booking Tech:</strong> ${profile.booking_system || 'None Detected'}</span>
                         <span><strong>Web Status:</strong> ${profile.website_status || '—'}</span>
-                        <span><strong>Phone:</strong> ${profile.phone_unformatted || profile.phone || '—'}</span>
+                        <div style="display:flex; flex-direction:column; gap:2px">
+                            <strong>Phone Numbers:</strong>
+                            ${(profile.phone || '').split(',').map(p => {
+                                const trimmed = p.trim();
+                                const source = (insights.phone_sources || {})[trimmed];
+                                if (source) {
+                                    const shortSource = source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+                                    return `<div style="display:flex; align-items:center; gap:6px">
+                                        <span>${escHtml(trimmed)}</span>
+                                        <a href="${escHtml(source)}" target="_blank" style="font-size:0.7rem; color:var(--accent-primary); text-decoration:underline">
+                                            (Source: ${escHtml(shortSource)})
+                                        </a>
+                                    </div>`;
+                                }
+                                return `<span>${escHtml(trimmed)}</span>`;
+                            }).join('') || '—'}
+                        </div>
                     </div>
                 </div>
             </div>

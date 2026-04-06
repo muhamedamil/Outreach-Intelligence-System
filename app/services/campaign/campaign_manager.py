@@ -55,12 +55,11 @@ async def run_discovery_campaign(
             industry=spec.industry,
             max_results=limit
         )
+        process_limit = limit
     else:
-        leads = await enrich_leads(
-            leads=spec.provided_leads,
-            industry=spec.industry,
-            include_reviews=True
-        )
+        # Bypassing Apify for Enrichment mode
+        leads = spec.provided_leads
+        process_limit = len(leads) # Process all leads for Excel uploads
 
     if not leads:
         logger.warning("No leads found in Layer 1. Pipeline stopping.")
@@ -70,12 +69,17 @@ async def run_discovery_campaign(
 
     results = []
 
-    for i, lead in enumerate(leads[:limit]):
-        logger.info(f"[{i+1}/{limit}] Processing: {lead.name}")
+    for i, lead in enumerate(leads[:process_limit]):
+        logger.info(f"[{i+1}/{process_limit}] Processing: {lead.name}")
         try:
-            # LAYER 2: Website analysis + social resolver
-            lead = await analyze_lead_website(lead)
-            lead = await resolve_missing_socials(lead)
+            if spec.mode == "DISCOVERY":
+                # LAYER 2: Website analysis + social resolver
+                lead = await analyze_lead_website(lead)
+                lead = await resolve_missing_socials(lead)
+            else:
+                # ENRICHMENT
+                from app.services.scraper.contact_scraper import run_multisite_contact_scraper
+                lead = await run_multisite_contact_scraper(lead)
 
             # LAYER 3: AI research (pain points, hooks, score)
             lead = await run_lead_researcher(lead)
