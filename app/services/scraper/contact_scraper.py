@@ -101,7 +101,7 @@ async def _get_precision_contacts_via_tavily(lead: LeadProfile) -> tuple[List[Di
         
     return start_urls, snippet_phones, ai_answer
 
-def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: str) -> Dict[str, Any]:
+def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: str, max_requests: int = 7) -> Dict[str, Any]:
     """Runs the Apify client and parses results with source URLs."""
     if not start_urls: return {}
     
@@ -109,7 +109,7 @@ def _run_apify_contact_actor_sync(start_urls: List[Dict[str, str]], lead_name: s
     run_input = {
         "startUrls": start_urls,
         "maxDepth": 3, 
-        "maxRequests": 7, # CRITICAL FIX: vdrmota uses maxRequests, not maxCrawlPages
+        "maxRequests": max_requests, # Flexible limit for speed/cost balance
         "stayWithinDomain": True,
         "extractFromText": True,
         "includeScriptContent": True
@@ -208,7 +208,7 @@ async def run_multisite_contact_scraper(lead: LeadProfile) -> LeadProfile:
     
     # STEP 2: Deep Scrape standalone domain if found
     if start_urls:
-         apify_contacts = await asyncio.to_thread(_run_apify_contact_actor_sync, start_urls, lead.name)
+         apify_contacts = await asyncio.to_thread(_run_apify_contact_actor_sync, start_urls, lead.name, 7)
          if apify_contacts:
              for item in apify_contacts.get("phone_list", []):
                  _add_to_ledger(item["phone"], "apify_official", item["url"], points=50)
@@ -272,4 +272,50 @@ async def run_multisite_contact_scraper(lead: LeadProfile) -> LeadProfile:
     else:
         logger.info(f"[{lead.name}] No precise phone numbers found.")
 
+    return lead
+
+async def deep_enrich_from_website(lead: LeadProfile, website_url: str) -> LeadProfile:
+    """
+    DISCOVERY MODE BRIDGE:
+    Targeted Apify run on a known website to extract Socials and Phones.
+    Does NOT use Tavily Search or Consensus Engine.
+    """
+    if not website_url or any(b in website_url.lower() for b in STARTURL_BLACKLIST):
+        return lead
+        
+    logger.info(f"[{lead.name}] Discovery Bridge: Triggering targeted Apify on {website_url}")
+    
+    start_urls = [{"url": website_url}]
+    # Run a faster, targeted scrape (max 4 requests)
+    contacts = await asyncio.to_thread(_run_apify_contact_actor_sync, start_urls, lead.name, 4)
+    
+    if not contacts:
+        return lead
+        
+    # 1. Update Socials if missing
+    if not lead.instagram_url and contacts.get("instagrams"):
+        lead.instagram_url = list(contacts["instagrams"])[0]
+    if not lead.facebook_url and contacts.get("facebooks"):
+        lead.facebook_url = list(contacts["facebooks"])[0]
+    if not lead.linkedin_url and contacts.get("linkedIns"):
+        lead.linkedin_url = list(contacts["linkedIns"])[0]
+    if not lead.twitter_url and contacts.get("twitters"):
+        lead.twitter_url = list(contacts["twitters"])[0]
+        
+    # 2. Add highly reliable phone numbers from the official site
+    phone_found = False
+    for p in contacts.get("phones", set()):
+        norm = _normalize_phone(p)
+        if len(norm) >= 10 and not (norm.startswith("1800") or norm.startswith("1860")):
+            # If lead.phone is empty or currently only has the Google Maps number, 
+            # we prepend the official website number as high-priority
+            current_phones = [ph.strip() for ph in lead.phone.split(",")] if lead.phone else []
+            if p not in current_phones:
+                current_phones.insert(0, p)
+                lead.phone = ", ".join(current_phones[:3])
+                phone_found = True
+                
+    if phone_found:
+        logger.info(f"[{lead.name}] Discovery Bridge found phone on site: {lead.phone}")
+        
     return lead

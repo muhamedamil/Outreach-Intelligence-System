@@ -73,8 +73,18 @@ async def run_discovery_campaign(
         logger.info(f"[{i+1}/{process_limit}] Processing: {lead.name}")
         try:
             if spec.mode == "DISCOVERY":
-                # LAYER 2: Website analysis + social resolver
+                # LAYER 1: Surface Scan (Playwright)
+                # Fast & extracts raw text context for AI
                 lead = await analyze_lead_website(lead)
+                
+                # LAYER 2: Targeted Deep Crawl (Apify)
+                # Only fire if critical data is missing (e.g. no Ig/Fb found on homepage)
+                if lead.website_url and (not lead.instagram_url or not lead.facebook_url):
+                    from app.services.scraper.contact_scraper import deep_enrich_from_website
+                    lead = await deep_enrich_from_website(lead, lead.website_url)
+                    
+                # LAYER 3: OSINT Social Resolver (DDG Dorking)
+                # Final safety net for missing handles
                 lead = await resolve_missing_socials(lead)
             else:
                 # ENRICHMENT
