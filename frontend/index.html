@@ -54,7 +54,13 @@
                 <div class="command-interface">
                     <div id="miningInput" class="input-group">
                         <input type="text" id="promptText" placeholder="e.g. Find all Indian beauty salons in Plano, TX with poor websites..." autocomplete="off">
-                        <div class="limit-selector">
+                        
+                        <div class="dedup-zone" style="margin-top: 15px;">
+                            <label for="dedupFileInput" class="dedup-label" style="font-size: 0.85rem; color: #a1a1aa; margin-bottom: 5px; display: block;">Optional: Upload previous leads CSV to avoid duplicates</label>
+                            <input type="file" id="dedupFileInput" accept=".xlsx,.xls,.csv" class="dedup-file-input" style="color: #fff; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px; border: 1px dashed #3f3f46; width: 100%;">
+                        </div>
+
+                        <div class="limit-selector" style="margin-top: 15px;">
                             <label for="limitMiner">Limit:</label>
                             <input type="number" id="limitMiner" value="10" min="1" max="50">
                         </div>

@@ -26,6 +26,7 @@ from app.services.scraper.website_analyzer import analyze_lead_website
 from app.services.scraper.social_resolver import resolve_missing_socials
 from app.agents.researcher.agent import run_lead_researcher
 from app.agents.outreach_writer.agent import generate_lead_outreach
+from app.services.dedup.csv_dedup import SeenLeadsIndex, filter_new_leads
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ async def run_discovery_campaign(
     prompt: Optional[str] = None,
     file_content: Optional[bytes] = None,
     file_name: Optional[str] = None,
-    limit: int = 10
+    limit: int = 10,
+    seen_index: Optional[SeenLeadsIndex] = None  # CSV-based dedup index
 ) -> List[Dict[str, Any]]:
     """
     PHASE 1: Layers 1–3 only.
@@ -58,6 +60,19 @@ async def run_discovery_campaign(
             industry=spec.industry,
             max_results=target_limit
         )
+
+        # ── DEDUP FILTER ──
+        # Remove leads we've already processed in a previous run.
+        # Uses place_id (primary) and name+city slug (fallback).
+        if seen_index and seen_index.total_seen > 0:
+            leads, skipped_count = filter_new_leads(leads, seen_index)
+            if not leads:
+                logger.warning(
+                    f"All {skipped_count} discovered leads were duplicates. "
+                    f"Try a different search area or upload a fresh query."
+                )
+                return []
+
         process_limit = target_limit
     else:
         # Bypassing Apify for Enrichment mode

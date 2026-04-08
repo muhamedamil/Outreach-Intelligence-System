@@ -108,6 +108,11 @@ async function runCampaign() {
         if (!promptText) { alert('Please enter a discovery prompt.'); return; }
         formData.append('prompt', promptText);
         formData.append('limit', document.getElementById('limitMiner').value || 10);
+        
+        const dedupFileInput = document.getElementById('dedupFileInput');
+        if (dedupFileInput && dedupFileInput.files.length > 0) {
+            formData.append('seen_leads_file', dedupFileInput.files[0]);
+        }
     } else {
         if (!selectedFile) { alert('Please upload a file to enrich.'); return; }
         formData.append('file', selectedFile);

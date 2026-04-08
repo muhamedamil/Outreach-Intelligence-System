@@ -31,7 +31,8 @@ async def health():
 async def run_campaign_api(
     prompt: Optional[str] = Form(None),
     limit: int = Form(10),
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = File(None),
+    seen_leads_file: Optional[UploadFile] = File(None)  # Dedup: previously exported leads CSV
 ):
     start_time = time.time()
     logger.info(f"Campaign API triggered -> Prompt: {prompt}, File: {file.filename if file else 'None'}")
@@ -41,7 +42,9 @@ async def run_campaign_api(
 
     try:
         raw_results = []
-        if file:
+
+        # ── CASE 1: File-only → Enrichment mode ──
+        if file and not prompt:
             if not file.filename.endswith((".xlsx", ".xls", ".csv")):
                 raise HTTPException(status_code=400, detail="Invalid file type")
             from app.services.file_processor.excel_processor import process_excel_content
@@ -49,9 +52,29 @@ async def run_campaign_api(
             if len(contents) > MAX_FILE_SIZE:
                 raise HTTPException(status_code=400, detail="File too large")
             raw_results = await process_excel_content(contents, file.filename, limit=limit)
+
+        # ── CASE 2: Prompt (+ optional seen_leads_file for dedup) → Discovery mode ──
         else:
             from app.services.campaign.campaign_manager import run_discovery_campaign
-            raw_results = await run_discovery_campaign(prompt=prompt, limit=limit)
+            from app.services.dedup.csv_dedup import build_seen_leads_index, SeenLeadsIndex
+
+            # Build the dedup index from the seen-leads file if provided
+            seen_index: Optional[SeenLeadsIndex] = None
+            if seen_leads_file:
+                if not seen_leads_file.filename.endswith((".xlsx", ".xls", ".csv")):
+                    raise HTTPException(status_code=400, detail="seen_leads_file must be a CSV or Excel file.")
+                seen_bytes = await seen_leads_file.read()
+                if len(seen_bytes) > MAX_FILE_SIZE:
+                    raise HTTPException(status_code=400, detail="seen_leads_file too large.")
+                seen_index = build_seen_leads_index(seen_bytes, seen_leads_file.filename)
+                logger.info(f"Dedup index loaded: {seen_index.total_seen} previously seen leads.")
+
+            raw_results = await run_discovery_campaign(
+                prompt=prompt,
+                limit=limit,
+                seen_index=seen_index
+            )
+
 
         formatted_results = []
         for i, res in enumerate(raw_results):
