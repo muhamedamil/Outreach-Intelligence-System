@@ -70,7 +70,7 @@ async def search_leads(
     industry: str = "salon",
     max_results: Optional[int] = None,
     include_reviews: bool = True,
-    max_reviews: int = 20,
+    max_reviews: int = 5,
 ) -> List[LeadProfile]:
     """
     Discovers leads via Google Maps using Apify.

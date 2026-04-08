@@ -19,6 +19,7 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
+from app.config.settings import settings
 from app.models.lead import LeadProfile
 from app.services.campaign.input_parser import parse_user_input, LeadSpec
 from app.services.gmaps.apify_client import search_leads, enrich_leads
@@ -59,7 +60,7 @@ async def run_discovery_campaign(
         # We overshoot by 2.5x if a dedup file is present (capped at 50 to control cost).
         target_limit = requested_limit
         if seen_index and seen_index.total_seen > 0:
-            target_limit = min(50, int(requested_limit * 2.5))
+            target_limit = min(50, int(requested_limit * 1.5))
             logger.info(f"[Dedup] Buffering request: {requested_limit} requested -> {target_limit} search limit")
 
         leads = await search_leads(
@@ -92,55 +93,64 @@ async def run_discovery_campaign(
 
     logger.info(f"Found {len(leads)} leads to process...")
 
-    results = []
+    # Semaphore to prevent overwhelming local Chromium or Browserless
+    semaphore = asyncio.Semaphore(settings.SCRAPER_CONCURRENCY)
+    
+    async def process_single_lead(lead: LeadProfile, index: int, total: int):
+        async with semaphore:
+            logger.info(f"[{index}/{total}] Processing: {lead.name}")
+            try:
+                # Wrap in _do_process to apply a tight timeout envelope
+                async def _do_process():
+                    l = lead
+                    if spec.mode == "DISCOVERY":
+                        # LAYER 1: Surface Scan (Playwright)
+                        l = await analyze_lead_website(l)
+                        
+                        # LAYER 2: Targeted Deep Crawl (Apify)
+                        if l.website_url and (not l.instagram_url or not l.facebook_url):
+                            from app.services.scraper.contact_scraper import deep_enrich_from_website
+                            l = await deep_enrich_from_website(l, l.website_url)
+                            
+                        # LAYER 3: OSINT Social Resolver (DDG Dorking)
+                        l = await resolve_missing_socials(l)
+                    else:
+                        # ENRICHMENT
+                        from app.services.scraper.contact_scraper import run_multisite_contact_scraper, deep_enrich_from_website
+                        l = await run_multisite_contact_scraper(l)
+                        l = await analyze_lead_website(l)
+                        if l.website_url and (not l.instagram_url or not l.facebook_url):
+                            l = await deep_enrich_from_website(l, l.website_url)
+                        l = await resolve_missing_socials(l)
 
-    for i, lead in enumerate(leads[:process_limit]):
-        logger.info(f"[{i+1}/{process_limit}] Processing: {lead.name}")
-        try:
-            if spec.mode == "DISCOVERY":
-                # LAYER 1: Surface Scan (Playwright)
-                # Fast & extracts raw text context for AI
-                lead = await analyze_lead_website(lead)
+                    # LAYER 3: AI research (pain points, hooks, score)
+                    l = await run_lead_researcher(l)
+
+                    logger.info(f"[{l.name}] Score: {l.lead_score} | Insights: {l.ai_research_insights is not None}")
+
+                    return {
+                        "lead": l.model_dump(),
+                        "campaign_outreach": None   # Outreach generated on-demand
+                    }
                 
-                # LAYER 2: Targeted Deep Crawl (Apify)
-                # Only fire if critical data is missing (e.g. no Ig/Fb found on homepage)
-                if lead.website_url and (not lead.instagram_url or not lead.facebook_url):
-                    from app.services.scraper.contact_scraper import deep_enrich_from_website
-                    lead = await deep_enrich_from_website(lead, lead.website_url)
-                    
-                # LAYER 3: OSINT Social Resolver (DDG Dorking)
-                # Final safety net for missing handles
-                lead = await resolve_missing_socials(lead)
-            else:
-                # ENRICHMENT
-                from app.services.scraper.contact_scraper import run_multisite_contact_scraper, deep_enrich_from_website
-                
-                # Keep the existing logic for scraping the mobile number in enrichment mode
-                lead = await run_multisite_contact_scraper(lead)
-                
-                # Add on top of that the things used in discovery mode
-                lead = await analyze_lead_website(lead)
-                
-                if lead.website_url and (not lead.instagram_url or not lead.facebook_url):
-                    lead = await deep_enrich_from_website(lead, lead.website_url)
-                    
-                lead = await resolve_missing_socials(lead)
+                # Allow 35s max per lead to survive Vercel 60s timeout
+                return await asyncio.wait_for(_do_process(), timeout=35.0)
 
-            # LAYER 3: AI research (pain points, hooks, score)
-            lead = await run_lead_researcher(lead)
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout processing {lead.name} (exceeded 35s). Skipping.")
+                return None
+            except Exception as e:
+                logger.error(f"Error processing {lead.name}: {str(e)}")
+                return None
 
-            logger.info(f"[{lead.name}] Score: {lead.lead_score} | Insights: {lead.ai_research_insights is not None}")
-
-            results.append({
-                "lead": lead.model_dump(),
-                "campaign_outreach": None   # Outreach generated on-demand in Phase 2
-            })
-
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"Error processing {lead.name}: {str(e)}")
-            continue
+    # Dispatch tasks concurrently
+    tasks = [
+        process_single_lead(lead, i + 1, process_limit)
+        for i, lead in enumerate(leads[:process_limit])
+    ]
+    
+    completed_results = await asyncio.gather(*tasks)
+    results = [r for r in completed_results if r is not None]
 
     logger.info(f"DISCOVERY COMPLETE | Enriched: {len(results)} leads")
     return results
