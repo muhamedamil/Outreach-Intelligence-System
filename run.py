@@ -39,6 +39,6 @@ if __name__ == "__main__":
         host="127.0.0.1", 
         port=8001,
         reload=False,       # CRITICAL: --reload breaks Playwright on Windows
-        workers=4,          # Serve UI + handle campaigns concurrently
+        workers=1,          # Single worker is required for stability on Windows
         log_level="info"
     )
