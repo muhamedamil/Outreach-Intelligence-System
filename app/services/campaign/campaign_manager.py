@@ -49,13 +49,16 @@ async def run_discovery_campaign(
     # LAYER 1: Discovery or Enrichment
     leads: List[LeadProfile] = []
     if spec.mode == "DISCOVERY":
+        target_limit = spec.limit if spec.limit else limit
+        logger.info(f"Target limit configured: {target_limit}")
+        
         leads = await search_leads(
             location=spec.location or "USA",
             queries=spec.queries,
             industry=spec.industry,
-            max_results=limit
+            max_results=target_limit
         )
-        process_limit = limit
+        process_limit = target_limit
     else:
         # Bypassing Apify for Enrichment mode
         leads = spec.provided_leads

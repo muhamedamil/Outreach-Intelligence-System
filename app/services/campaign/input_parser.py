@@ -24,6 +24,7 @@ class LeadSpec(BaseModel):
     queries: List[str] = []
     provided_leads: List[LeadProfile] = []
     industry: str = "salon"  # Auto-detected: salon or solar
+    limit: Optional[int] = None
 
 async def parse_user_input(
     prompt: Optional[str] = None, 
@@ -47,15 +48,16 @@ async def _parse_prompt(prompt: str) -> LeadSpec:
     logger.info(f"Parsing prompt input: {prompt}")
 
     system_prompt = """
-    You are an AI data extractor. Extract the 'queries', 'location', and 'industry' from the user's request.
+    You are an AI data extractor. Extract the 'queries', 'location', 'industry', and optionally the 'limit' from the user's request.
     - 'industry' MUST be either "salon" or "solar". Infer this from keywords (e.g., hair, beauty -> salon; energy, panel, solar -> solar).
     - Return ONLY valid JSON.
     - 'queries' should be a list of search terms for Google Maps.
     - 'location' should be a city/state string.
+    - 'limit' should be an integer if the user explicitly requests a certain quantity (e.g., "Find 5 salons" -> 5).
     
     Example:
-    Input: "Find Indian beauty salons in Plano"
-    Output: {"queries": ["Indian beauty salon", "threading parlor"], "location": "Plano, TX", "industry": "salon"}
+    Input: "Find 5 Indian beauty salons in Plano"
+    Output: {"queries": ["Indian beauty salon", "threading parlor"], "location": "Plano, TX", "industry": "salon", "limit": 5}
     Input: "Show all salons in Dallas with poor websites"
     Output: {"queries": ["beauty salon", "hair salon", "cosmetology"], "location": "Dallas, TX", "industry": "salon"}
     """
@@ -73,7 +75,8 @@ async def _parse_prompt(prompt: str) -> LeadSpec:
             mode="DISCOVERY",
             location=data.get("location"),
             queries=data.get("queries", []),
-            industry=industry
+            industry=industry,
+            limit=data.get("limit")
         )
     except Exception as e:
         logger.warning(f"Failed to parse prompt with LLM: {str(e)}. Using fallback extraction.")

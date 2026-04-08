@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     # -------------------------
     # LLM CONFIG
     # -------------------------
-    LLM_API_KEY: str | None = Field(None)
-    TAVILY_API_KEY: str | None = Field(None)
+    LLM_API_KEY: str | None = None
+    TAVILY_API_KEY: str | None = None
     LLM_MODEL: str = "llama-3.1-8b-instant"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 500
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # -------------------------
     # APIFY & DISCOVERY
     # -------------------------
-    APIFY_TOKEN: str | None = Field(None, env="APIFY_TOKEN")
+    APIFY_TOKEN: str | None = None
     APIFY_MAX_RESULTS: int = 100
 
     # YOUR "SWEET SPOT" FILTERS

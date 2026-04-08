@@ -84,16 +84,24 @@ async def search_leads(
     
     max_results = max_results or settings.APIFY_MAX_RESULTS
     
+    # ── PRODUCTION DYNAMIC BUFFERING ──
+    # Survival rate through strict filters (closed, reviews 10-1000, category) is ~25%.
+    # Multiplier ensures we scrape enough raw leads to fulfill the exact user request.
+    yield_multiplier = 4.0
+    total_needed = int(max_results * yield_multiplier)
+    
+    # Distribute the total needed across the number of queries to avoid runaway costs
+    num_queries = max(1, len(queries))
+    # Cap maximum at 100 per query to prevent extreme scenarios, floor at 5.
+    crawl_limit = max(5, min(100, int(total_needed / num_queries)))
+    
     logger.info(f"🔍 Starting Apify Discovery")
     logger.info(f"   Location: {location}")
     logger.info(f"   Queries:  {queries}")
-    logger.info(f"   Max results per query: {max_results}")
+    logger.info(f"   Target Leads: {max_results} | Crawl Limit p/q: {crawl_limit}")
     logger.info(f"   Review threshold: {settings.REVIEW_MIN}-{settings.REVIEW_MAX}")
 
     client = ApifyClient(settings.APIFY_TOKEN)
-
-    # For discovery, crawl more places to survive local filtering (min 50)
-    crawl_limit = max(50, max_results * 3) if max_results else settings.APIFY_MAX_RESULTS
 
     run_input = {
         "searchStringsArray": queries,
