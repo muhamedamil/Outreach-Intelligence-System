@@ -60,7 +60,7 @@ async def run_discovery_campaign(
         # We overshoot by 2.5x if a dedup file is present (capped at 50 to control cost).
         target_limit = requested_limit
         if seen_index and seen_index.total_seen > 0:
-            target_limit = min(50, int(requested_limit * 1.5))
+            target_limit = int(requested_limit * 2.5)
             logger.info(f"[Dedup] Buffering request: {requested_limit} requested -> {target_limit} search limit")
 
         leads = await search_leads(
@@ -133,12 +133,9 @@ async def run_discovery_campaign(
                         "campaign_outreach": None   # Outreach generated on-demand
                     }
                 
-                # Allow 35s max per lead to survive Vercel 60s timeout
-                return await asyncio.wait_for(_do_process(), timeout=35.0)
+                # Allow unlimited processing time per lead for local execution
+                return await _do_process()
 
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout processing {lead.name} (exceeded 35s). Skipping.")
-                return None
             except Exception as e:
                 logger.error(f"Error processing {lead.name}: {str(e)}")
                 return None
