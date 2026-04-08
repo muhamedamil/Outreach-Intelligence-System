@@ -88,8 +88,18 @@ async def run_discovery_campaign(
                 lead = await resolve_missing_socials(lead)
             else:
                 # ENRICHMENT
-                from app.services.scraper.contact_scraper import run_multisite_contact_scraper
+                from app.services.scraper.contact_scraper import run_multisite_contact_scraper, deep_enrich_from_website
+                
+                # Keep the existing logic for scraping the mobile number in enrichment mode
                 lead = await run_multisite_contact_scraper(lead)
+                
+                # Add on top of that the things used in discovery mode
+                lead = await analyze_lead_website(lead)
+                
+                if lead.website_url and (not lead.instagram_url or not lead.facebook_url):
+                    lead = await deep_enrich_from_website(lead, lead.website_url)
+                    
+                lead = await resolve_missing_socials(lead)
 
             # LAYER 3: AI research (pain points, hooks, score)
             lead = await run_lead_researcher(lead)

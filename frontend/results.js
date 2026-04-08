@@ -132,7 +132,14 @@ function renderList(results) {
         const origIdx = row._origIdx;
         const profile = row.business_profile || {};
         let catTag = 'tag-dead', catLabel = 'No Website';
-        if (profile.category === 'STATIC_WEBSITE')  { catTag = 'tag-static'; catLabel = 'Static'; }
+        if (profile.category === 'STATIC_WEBSITE') {
+            catTag = 'tag-static';
+            catLabel = (profile.website_tech_type && profile.website_tech_type.includes('Dynamic')) ? 'Dynamic Web' : 'Static Web';
+            if (profile.has_generic_booking) {
+                catTag = 'tag-auto';
+                catLabel = 'Custom Booking';
+            }
+        }
         if (profile.category === 'FULLY_AUTOMATED') { catTag = 'tag-auto';   catLabel = 'Automated'; }
 
         const isWa = profile.whatsapp_status === 'DETECTED';
@@ -432,7 +439,8 @@ function renderSlideOver(filteredIdx) {
                     <h4 class="so-section-title">Metadata</h4>
                     <div style="font-size:0.8rem; color:#94A3B8; display:flex; flex-direction:column; gap:4px; background:rgba(0,0,0,0.18); padding:11px; border-radius:7px">
                         <span><strong>Category:</strong> ${profile.category || '—'}</span>
-                        <span><strong>Booking Tech:</strong> ${profile.booking_system || 'None Detected'}</span>
+                        <span><strong>Tech Stack:</strong> ${profile.website_tech_type || 'Unknown'}</span>
+                        <span><strong>Booking Tech:</strong> ${profile.booking_system || (profile.has_generic_booking ? 'Custom Setup (' + (profile.generic_booking_buttons || []).join(', ') + ')' : 'None Detected')}</span>
                         <span><strong>Web Status:</strong> ${profile.website_status || '—'}</span>
                         <div style="display:flex; flex-direction:column; gap:2px">
                             <strong>Phone Numbers:</strong>

@@ -214,6 +214,9 @@ class LeadProfile(BaseModel):
     # ── 3-BUCKET CLASSIFICATION ──
     category: LeadCategory = LeadCategory.NO_WEBSITE
     booking_system: Optional[str] = None
+    has_generic_booking: bool = False
+    generic_booking_buttons: List[str] = []
+    website_tech_type: str = "Unknown"
 
     # ── SOCIAL / CONTACT CHANNELS ──
     whatsapp_status: WhatsAppStatus = WhatsAppStatus.UNVERIFIED

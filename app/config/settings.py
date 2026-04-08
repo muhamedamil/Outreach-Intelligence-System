@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     # -------------------------
     SCRAPER_TIMEOUT: int = 20
     SCRAPER_RETRIES: int = 2
-    SCRAPER_CONCURRENCY: int = 7
+    SCRAPER_CONCURRENCY: int = 2
+    BROWSERLESS_WS_URL: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=True, extra="ignore"

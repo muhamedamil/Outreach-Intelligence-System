@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright, Page, Browser
 from app.models.lead import LeadProfile, LeadCategory, WhatsAppStatus, WebsiteStatus
 from app.services.scraper.social_resolver import resolve_missing_socials
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,10 @@ MODERN_SIGNATURES = [
     "angular",
     "vercel",
     "netlify",
+    "shopify",
+    "squarespace",
+    "id=\"root\"",
+    "id=\"__next\""
 ]
 
 # Subpages to check for booking (and social media)
@@ -415,7 +420,12 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
     async with async_playwright() as p:
         browser = None
         try:
-            browser = await p.chromium.launch(headless=True)
+            if settings.BROWSERLESS_WS_URL:
+                logger.info(f"[{lead.name}] Connecting to remote browser via CDP...")
+                browser = await p.chromium.connect_over_cdp(settings.BROWSERLESS_WS_URL)
+            else:
+                browser = await p.chromium.launch(headless=True)
+                
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
@@ -568,7 +578,7 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
             # Independent try/except — navigation here means the site itself
             # redirected to a booking platform when a button was clicked.
             try:
-                booking = await _detect_booking_system(page, page_html)
+                booking = await _detect_booking_system(page, page_html, lead)
             except Exception as e:
                 booking = None
                 if _is_navigation_error(str(e)):
@@ -585,7 +595,7 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
             else:
                 try:
                     # Pass context instead of page so the homepage DOM remains intact
-                    booking_sub = await _check_subpages_for_booking(context, url)
+                    booking_sub = await _check_subpages_for_booking(context, url, lead)
                 except Exception as e:
                     booking_sub = None
                     if _is_navigation_error(str(e)):
@@ -660,8 +670,8 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
 # ─────────────────────────────────────────────
 
 
-async def _detect_booking_system(page: Page, html: str) -> Optional[str]:
-    """5-layer booking detection."""
+async def _detect_booking_system(page: Page, html: str, lead: LeadProfile) -> Optional[str]:
+    """5-layer booking detection + generic custom booking flow capture."""
 
     # Layer 1: Iframes
     iframes = await page.query_selector_all("iframe")
@@ -689,14 +699,32 @@ async def _detect_booking_system(page: Page, html: str) -> Optional[str]:
 
     # Layer 4: Button text
     buttons = await page.query_selector_all("a, button")
+    found_generic = set()
+    generic_keywords = ["book now", "book online", "take appointment", "schedule", "request a quote", "get a quote"]
+    
     for btn in buttons:
         try:
             text = (await btn.inner_text()).lower().strip()
+            if not text or len(text) > 40 or "facebook" in text:
+                continue
+
+            # Check known platforms
             for platform, data in BOOKING_PLATFORMS.items():
                 if any(btn_text in text for btn_text in data["buttons"] if btn_text):
                     return platform
+
+            # Check generic custom flows
+            if any(k in text for k in generic_keywords) and len(found_generic) < 3:
+                # Store the capitalized version for nice display
+                raw_text = (await btn.inner_text()).strip()
+                found_generic.add(raw_text)
+                
         except Exception:
             continue
+
+    if found_generic:
+        lead.has_generic_booking = True
+        lead.generic_booking_buttons = list(found_generic)
 
     # Layer 5: Raw HTML
     html_lower = html.lower()
@@ -707,7 +735,7 @@ async def _detect_booking_system(page: Page, html: str) -> Optional[str]:
     return None
 
 
-async def _check_subpages_for_booking(context, url: str) -> Optional[str]:
+async def _check_subpages_for_booking(context, url: str, lead: LeadProfile) -> Optional[str]:
     """Check common subpages for booking systems without hijacking the main page."""
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
@@ -1017,17 +1045,30 @@ def _extract_phone_from_text(text: str, lead: LeadProfile):
 
 
 def _score_website_quality(html_lower: str, lead: LeadProfile):
+    is_legacy = False
+    is_modern = False
+
     for sig in LEGACY_SIGNATURES:
         if sig in html_lower:
             lead.lead_score += 5
             lead.lead_score_breakdown[f"legacy_{sig.replace('.', '')}"] = 5
+            is_legacy = True
             break
 
     for sig in MODERN_SIGNATURES:
         if sig in html_lower:
             lead.lead_score -= 5
             lead.lead_score_breakdown["modern_tech"] = -5
+            is_modern = True
             break
+
+    # Determine Static vs Dynamic Tech Type
+    if is_modern:
+        lead.website_tech_type = "Dynamic/Modern"
+    elif is_legacy:
+        lead.website_tech_type = "Static/Legacy"
+    else:
+        lead.website_tech_type = "Static/Basic HTML"
 
     if "viewport" not in html_lower:
         lead.lead_score += 10
