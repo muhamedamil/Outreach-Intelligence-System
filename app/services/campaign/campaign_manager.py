@@ -51,9 +51,17 @@ async def run_discovery_campaign(
     # LAYER 1: Discovery or Enrichment
     leads: List[LeadProfile] = []
     if spec.mode == "DISCOVERY":
-        target_limit = spec.limit if spec.limit else limit
-        logger.info(f"Target limit configured: {target_limit}")
+        requested_limit = spec.limit if spec.limit else limit
         
+        # ── DISCOVERY OVERSHOOT ──
+        # If we have a list of seen leads, we must ask Apify for MORE than the limit.
+        # Otherwise, if the first 10 results are all duplicates, the user gets 0 results.
+        # We overshoot by 2.5x if a dedup file is present (capped at 50 to control cost).
+        target_limit = requested_limit
+        if seen_index and seen_index.total_seen > 0:
+            target_limit = min(50, int(requested_limit * 2.5))
+            logger.info(f"[Dedup] Buffering request: {requested_limit} requested -> {target_limit} search limit")
+
         leads = await search_leads(
             location=spec.location or "USA",
             queries=spec.queries,
@@ -62,8 +70,6 @@ async def run_discovery_campaign(
         )
 
         # ── DEDUP FILTER ──
-        # Remove leads we've already processed in a previous run.
-        # Uses place_id (primary) and name+city slug (fallback).
         if seen_index and seen_index.total_seen > 0:
             leads, skipped_count = filter_new_leads(leads, seen_index)
             if not leads:
@@ -72,8 +78,9 @@ async def run_discovery_campaign(
                     f"Try a different search area or upload a fresh query."
                 )
                 return []
-
-        process_limit = target_limit
+        
+        # Ensure we only process the specific amount requested by the user
+        process_limit = requested_limit
     else:
         # Bypassing Apify for Enrichment mode
         leads = spec.provided_leads

@@ -619,7 +619,7 @@ function exportCSV() {
     if (!filteredResults.length) return;
 
     const headers = [
-        'Name', 'Category', 'Lead Score', 'Phone', 'WhatsApp Status',
+        'Place ID', 'Name', 'Category', 'Lead Score', 'Phone', 'WhatsApp Status',
         'Google Rating', 'Review Count', 'Address', 'City', 'State',
         'Website', 'Instagram', 'Facebook', 'WhatsApp Number',
         'Booking System', 'Website Status', 'Outreach Status',
@@ -632,6 +632,7 @@ function exportCSV() {
         const state = outreachState[r._origIdx] || 'idle';
 
         return [
+            p.place_id || '',
             p.name || '',
             p.category || '',
             p.lead_score || 0,
