@@ -92,65 +92,96 @@ async def run_discovery_campaign(
         return []
 
     logger.info(f"Found {len(leads)} leads to process...")
+    process_limit = min(len(leads), process_limit)
+    active_leads = leads[:process_limit]
 
-    # Semaphore to prevent overwhelming local Chromium or Browserless
+    # --- PHASE 1: LOCAL SURFACE SCANS (Concurrent) ---
+    logger.info(f"🌐 [Phase 1] Starting concurrent surface scans for {len(active_leads)} leads...")
+    
     semaphore = asyncio.Semaphore(settings.SCRAPER_CONCURRENCY)
-    
-    async def process_single_lead(lead: LeadProfile, index: int, total: int):
+
+    async def _surface_scan(l: LeadProfile):
         async with semaphore:
-            logger.info(f"[{index}/{total}] Processing: {lead.name}")
             try:
-                # Wrap in _do_process to apply a tight timeout envelope
-                async def _do_process():
-                    l = lead
-                    if spec.mode == "DISCOVERY":
-                        # LAYER 1: Surface Scan (Playwright)
-                        l = await analyze_lead_website(l)
-                        
-                        # LAYER 2: Targeted Deep Crawl (Apify)
-                        if l.website_url and (not l.instagram_url or not l.facebook_url):
-                            from app.services.scraper.contact_scraper import deep_enrich_from_website
-                            l = await deep_enrich_from_website(l, l.website_url)
-                            
-                        # LAYER 3: OSINT Social Resolver (DDG Dorking)
-                        l = await resolve_missing_socials(l)
-                    else:
-                        # ENRICHMENT
-                        from app.services.scraper.contact_scraper import run_multisite_contact_scraper, deep_enrich_from_website
-                        l = await run_multisite_contact_scraper(l)
-                        l = await analyze_lead_website(l)
-                        if l.website_url and (not l.instagram_url or not l.facebook_url):
-                            l = await deep_enrich_from_website(l, l.website_url)
-                        l = await resolve_missing_socials(l)
-
-                    # LAYER 3: AI research (pain points, hooks, score)
-                    l = await run_lead_researcher(l)
-
-                    logger.info(f"[{l.name}] Score: {l.lead_score} | Insights: {l.ai_research_insights is not None}")
-
-                    return {
-                        "lead": l.model_dump(),
-                        "campaign_outreach": None   # Outreach generated on-demand
-                    }
-                
-                # Allow unlimited processing time per lead for local execution
-                return await _do_process()
-
+                # Fast local playwright scan
+                return await analyze_lead_website(l)
             except Exception as e:
-                logger.error(f"Error processing {lead.name}: {str(e)}")
-                return None
+                logger.error(f"Surface scan failed for {l.name}: {e}")
+                return l
 
-    # Dispatch tasks concurrently
-    tasks = [
-        process_single_lead(lead, i + 1, process_limit)
-        for i, lead in enumerate(leads[:process_limit])
-    ]
+    tasks_p1 = [_surface_scan(l) for l in active_leads]
+    active_leads = await asyncio.gather(*tasks_p1)
+
+    # --- PHASE 2: BATCH APIFY ENRICHMENT (Discovery Mode) ---
+    if spec.mode == "DISCOVERY":
+        logger.info("🧪 [Phase 2] Checking for leads requiring deep enrichment...")
+        
+        # Identify leads missing critical data (Instagram or Facebook)
+        enrich_map: Dict[str, LeadProfile] = {}
+        for l in active_leads:
+            if l.website_url and (not l.instagram_url or not l.facebook_url):
+                enrich_map[l.website_url] = l
+        
+        if enrich_map:
+            from app.services.scraper.contact_scraper import batch_deep_enrich_from_websites
+            # This triggers exactly ONE Apify run for the whole batch
+            await batch_deep_enrich_from_websites(enrich_map)
+        
+        # Final social resolution safety net (local OSINT)
+        async def _resolve_socials(l: LeadProfile):
+            try:
+                return await resolve_missing_socials(l)
+            except Exception:
+                return l
+
+        tasks_p2 = [_resolve_socials(l) for l in active_leads]
+        active_leads = await asyncio.gather(*tasks_p2)
+    else:
+        # ENRICHMENT MODE: Use multi-site scraper (retains higher specificity for single excel rows)
+        # But we'll still parallelize it
+        from app.services.scraper.contact_scraper import run_multisite_contact_scraper
+        
+        async def _deep_scrape(l: LeadProfile):
+            async with semaphore:
+                try:
+                    l = await run_multisite_contact_scraper(l)
+                    # Sync with what we do for discovery
+                    l = await analyze_lead_website(l)
+                    l = await resolve_missing_socials(l)
+                    return l
+                except Exception:
+                    return l
+
+        tasks_deep = [_deep_scrape(l) for l in active_leads]
+        active_leads = await asyncio.gather( *tasks_deep)
+
+    # --- PHASE 3: AI RESEARCH (Concurrent) ---
+    logger.info(f"🧠 [Phase 3] Running AI research insights for {len(active_leads)} leads...")
     
-    completed_results = await asyncio.gather(*tasks)
-    results = [r for r in completed_results if r is not None]
+    async def _ai_research(l: LeadProfile):
+        async with semaphore:
+            try:
+                l = await run_lead_researcher(l)
+                logger.info(f"[{l.name}] Score: {l.lead_score} | Insights: {l.ai_research_insights is not None}")
+                return l
+            except Exception as e:
+                logger.error(f"AI research failed for {l.name}: {e}")
+                return l
 
-    logger.info(f"DISCOVERY COMPLETE | Enriched: {len(results)} leads")
+    tasks_p3 = [_ai_research(l) for l in active_leads]
+    final_leads = await asyncio.gather(*tasks_p3)
+
+    results = [
+        {
+            "lead": l.model_dump(),
+            "campaign_outreach": None
+        }
+        for l in final_leads
+    ]
+
+    logger.info(f"DISCOVERY COMPLETE | Finalized {len(results)} leads")
     return results
+
 
 
 async def run_outreach_for_lead(lead_data: Dict[str, Any]) -> Dict[str, str]:

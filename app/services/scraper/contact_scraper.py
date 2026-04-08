@@ -405,8 +405,9 @@ async def _get_precision_contacts(
 def _run_apify_contact_actor_sync(
     start_urls: List[Dict[str, str]],
     lead_name: str,
-    max_requests: int = 5  # Reduced from 7: URL scorer filters bad pages earlier
-) -> Dict[str, Any]:
+    max_requests: int = 5,
+    is_batch: bool = False
+) -> Any:
     """Runs the Apify contact-info scraper with surgical path constraints."""
     if not start_urls:
         return {}
@@ -452,9 +453,14 @@ def _run_apify_contact_actor_sync(
     try:
         run = client.actor("vdrmota/contact-info-scraper").call(run_input=run_input)
         if not run or "defaultDatasetId" not in run:
-            return {}
+            return {} if not is_batch else []
             
         dataset_id = run["defaultDatasetId"]
+        
+        if is_batch:
+            # For batch mode, return the raw list of dataset items
+            return list(client.dataset(dataset_id).iterate_items())
+
         contacts = {
             "phones": set(),
             "emails": set(),
@@ -693,4 +699,114 @@ async def deep_enrich_from_website(lead: LeadProfile, website_url: str) -> LeadP
     if phone_found:
         logger.info(f"[{lead.name}] Discovery Bridge found phone on site: {lead.phone}")
         
-    return lead
+async def batch_deep_enrich_from_websites(url_to_lead_map: Dict[str, LeadProfile]) -> List[LeadProfile]:
+    """
+    PRODUCTION BATCH ENRICHMENT:
+    Takes a map of {website_url: LeadProfile} and runs ONE Apify actor call
+    for all of them at once. This solves the "Startup Tax" credit issue.
+    """
+    if not url_to_lead_map:
+        return []
+
+    leads = list(url_to_lead_map.values())
+    urls = list(url_to_lead_map.keys())
+    
+    # Prepare startUrls for Apify
+    start_urls = []
+    for u in urls:
+        if u and _classify_url(u, url_to_lead_map[u]) > 0:
+            start_urls.append({"url": u})
+    
+    if not start_urls:
+        return leads
+
+    logger.info(f"🚀 [Batch] Triggering unified Apify enrichment for {len(start_urls)} distinctive domains...")
+    
+    # Use our existing sync runner via thread to process the batch
+    max_batch_requests = min(500, len(start_urls) * 5)
+    
+    dataset_items = await asyncio.to_thread(
+        _run_apify_contact_actor_sync, 
+        start_urls, 
+        "BATCH_MODE", 
+        max_batch_requests,
+        True # is_batch
+    )
+
+    if not dataset_items:
+        logger.warning("[Batch] Apify returned no data for the batch.")
+        return leads
+
+    def _get_base_domain(url: str) -> str:
+        domain = re.sub(r'https?://(?:www\.)?', '', url.lower()).split('/')[0]
+        return domain
+
+    # Map domains to leads for efficient lookups
+    domain_to_leads: Dict[str, List[LeadProfile]] = {}
+    for url, lead in url_to_lead_map.items():
+        dom = _get_base_domain(url)
+        if dom not in domain_to_leads: domain_to_leads[dom] = []
+        domain_to_leads[dom].append(lead)
+
+    # Accumulate data by domain
+    domain_to_data: Dict[str, Dict[str, Any]] = {}
+    for item in dataset_items:
+        page_url = item.get("url")
+        if not page_url: continue
+        
+        dom = _get_base_domain(page_url)
+        if dom not in domain_to_data:
+            domain_to_data[dom] = {
+                "phones": set(), "emails": set(), "linkedIns": set(),
+                "instagrams": set(), "twitters": set(), "facebooks": set()
+            }
+        
+        agg = item.get("aggregatedResults", {})
+        target = agg if agg else item
+        
+        for p in target.get("phones", []) + target.get("phonesUncertain", []):
+            domain_to_data[dom]["phones"].add(p)
+        for e in target.get("emails", []):
+            domain_to_data[dom]["emails"].add(e)
+        for s in target.get("linkedIns", []):
+            domain_to_data[dom]["linkedIns"].add(s)
+        for s in target.get("instagrams", []):
+            domain_to_data[dom]["instagrams"].add(s)
+        for s in target.get("twitters", []):
+            domain_to_data[dom]["twitters"].add(s)
+        for s in target.get("facebooks", []):
+            domain_to_data[dom]["facebooks"].add(s)
+
+    # Merge results back into lead models
+    for dom, leads_to_update in domain_to_leads.items():
+        if dom in domain_to_data:
+            data = domain_to_data[dom]
+            for lead in leads_to_update:
+                # 1. Socials
+                if not lead.instagram_url and data["instagrams"]:
+                    lead.instagram_url = list(data["instagrams"])[0]
+                if not lead.facebook_url and data["facebooks"]:
+                    lead.facebook_url = list(data["facebooks"])[0]
+                if not lead.linkedin_url and data["linkedIns"]:
+                    lead.linkedin_url = list(data["linkedIns"])[0]
+                if not lead.twitter_url and data["twitters"]:
+                    lead.twitter_url = list(data["twitters"])[0]
+                
+                # 2. Phones
+                current_phones = [p.strip() for p in lead.phone.split(",")] if lead.phone else []
+                new_phones = []
+                for p in data["phones"]:
+                    norm = _normalize_phone(p)
+                    if len(norm) >= 10 and not (norm.startswith("1800") or norm.startswith("1860")):
+                        if p not in current_phones: new_phones.append(p)
+                
+                if new_phones:
+                    lead.phone = ", ".join((new_phones + current_phones)[:3])
+                    logger.info(f"[{lead.name}] Batch found phone: {lead.phone}")
+
+                # 3. Emails
+                final_emails = [e for e in data["emails"] if not any(s in e.lower() for s in ["fnshift", "apify"])]
+                if final_emails:
+                    lead.email = ", ".join(list(dict.fromkeys(final_emails))[:3])
+
+    return leads

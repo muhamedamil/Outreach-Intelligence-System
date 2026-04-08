@@ -304,9 +304,9 @@ async def _try_recover_after_navigation(page, lead: LeadProfile) -> bool:
     page is a regular site worth continuing to analyse.
     """
     try:
-        # Give the new page up to 5 seconds to finish loading.
+        # Increased settling time from 5s to 15s for local contested resources
         await asyncio.wait_for(
-            page.wait_for_load_state("domcontentloaded"), timeout=5
+            page.wait_for_load_state("domcontentloaded"), timeout=15
         )
     except Exception:
         pass  # Even a partial load is useful
@@ -390,18 +390,14 @@ async def analyze_lead_website(lead: LeadProfile) -> LeadProfile:
         logger.info(f"[{lead.name}] Website IS {platform}. Category: FULLY_AUTOMATED")
         return lead
 
-    # ── FULL BROWSER ANALYSIS — hard 75s total budget ──
-    logger.info(f"[{lead.name}] Starting browser analysis: {url}")
+    # ── FULL BROWSER ANALYSIS — LOCAL UNLEASHED ──
+    logger.info(f"[{lead.name}] Starting deep browser analysis: {url}")
     try:
-        return await asyncio.wait_for(
-            _safe_playwright_call(_browser_analyze_lead, lead, url),
-            timeout=75,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            f"[{lead.name}] ⏱ Analysis budget exceeded (75s). Returning partial data."
-        )
-        lead.website_status = WebsiteStatus.TIMEOUT
+        # Reverted 75s budget: Local runs allow for slow/heavy sites to finish
+        return await _safe_playwright_call(_browser_analyze_lead, lead, url)
+    except Exception as e:
+        logger.error(f"[{lead.name}] Browser analysis failed: {str(e)}")
+        lead.website_status = WebsiteStatus.ERROR
         if lead.category == LeadCategory.NO_WEBSITE:
             lead.category = LeadCategory.STATIC_WEBSITE
         return lead
@@ -436,10 +432,10 @@ async def _browser_analyze_lead(lead: LeadProfile, url: str) -> LeadProfile:
             # ── PHASE 1: INITIAL NAVIGATION ──
             response = None
             try:
-                # Reduced initial timeout from 25s to 18s to prevent total budget consumption
-                response = await page.goto(url, wait_until="load", timeout=18000)
-                # Let the network settle (catches late JS redirects) - reduced timeout
-                await page.wait_for_load_state("networkidle", timeout=5000)
+                # Increased initial timeout from 18s to 45s for local contested resources
+                response = await page.goto(url, wait_until="load", timeout=45000)
+                # Let the network settle (catches late JS redirects) - increased timeout
+                await page.wait_for_load_state("networkidle", timeout=10000)
                 await asyncio.sleep(1.0)
             except Exception as nav_err:
                 error_msg = str(nav_err).lower()
