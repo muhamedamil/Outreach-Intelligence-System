@@ -94,4 +94,4 @@ app.mount("/", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="front
 if __name__ == "__main__":
     import uvicorn
     print("Direct execution - Starting uvicorn...")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8010)

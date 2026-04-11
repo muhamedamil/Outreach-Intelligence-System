@@ -22,7 +22,7 @@ if __name__ == "__main__":
     
     import uvicorn
     
-    print("Starting Lead Intelligence Engine on http://127.0.0.1:8001")
+    print("Starting Lead Intelligence Engine on http://127.0.0.1:8010")
     print("   Press CTRL+C to stop.")
     print("")
     
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app", 
         host="127.0.0.1", 
-        port=8001,
+        port=8010,
         reload=False,       # CRITICAL: --reload breaks Playwright on Windows
         workers=1,          # Single worker is required for stability on Windows
         log_level="info"
